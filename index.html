@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oral History Interviewer</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  #q { font-size: 1.2rem; background: #f4f4f5; padding: 1rem; border-radius: 8px; }
+  button { font-size: 1rem; padding: .6rem 1rem; margin: .5rem .25rem; }
+  #timeline li, #people li { margin: .4rem 0; }
+  svg { border: 1px solid #ddd; border-radius: 8px; width: 100%; height: 220px; }
+</style>
+</head>
+<body>
+<h1>Oral History Interviewer</h1>
+<p>Session: <code id="sid"></code></p>
+<div id="q" aria-live="polite">Press “Start” to begin the interview.</div>
+<div>
+  <button id="start">Start</button>
+  <button id="talk" disabled>Hold to talk</button>
+  <button id="finish" disabled>Finish</button>
+</div>
+<p id="status"></p>
+
+<h2>Timeline</h2>
+<ol id="timeline"></ol>
+
+<h2>Family map</h2>
+<svg id="map" viewBox="0 0 700 220" role="img" aria-label="Family map"></svg>
+<ul id="people"></ul>
+
+<script>
+const sessionId = "s-" + Date.now().toString(36);
+document.getElementById("sid").textContent = sessionId;
+let history = [];       // [{role, text}]
+let clips = {};         // clip_id -> {audioUrl, start, end}
+let facts = [];
+let recorder = null, chunks = [], stream = null;
+
+const q = document.getElementById("q");
+const statusEl = document.getElementById("status");
+const talkBtn = document.getElementById("talk");
+
+function speak(text) {
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    speechSynthesis.speak(u);
+  } catch (e) { /* TTS unavailable; question stays on screen */ }
+}
+
+function renderFacts() {
+  const tl = document.getElementById("timeline");
+  tl.innerHTML = "";
+  facts.forEach((f, i) => {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.textContent = "▶ replay";
+    b.onclick = () => replay(f.clip_id);
+    li.textContent = `${f.when || "undated"} — ${f.text} [${f.clip_id} ${f.start}-${f.end}s] `;
+    li.appendChild(b);
+    tl.appendChild(li);
+  });
+  // Family map: unique people mentioned, laid out as SVG circles (no lib).
+  const people = [...new Set(facts.flatMap(f => f.people || []))];
+  const svg = document.getElementById("map");
+  svg.innerHTML = "";
+  people.forEach((p, i) => {
+    const x = 80 + i * 140, y = 110;
+    const c = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    c.setAttribute("cx", x); c.setAttribute("cy", y); c.setAttribute("r", 40);
+    c.setAttribute("fill", "#e0e7ff");
+    const t = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    t.setAttribute("x", x); t.setAttribute("y", y + 5);
+    t.setAttribute("text-anchor", "middle"); t.textContent = p.slice(0, 12);
+    svg.appendChild(c); svg.appendChild(t);
+  });
+  const ul = document.getElementById("people");
+  ul.innerHTML = "";
+  people.forEach(p => { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); });
+}
+
+function replay(clipId) {
+  const c = clips[clipId];
+  if (!c || !c.audioUrl) { statusEl.textContent = "No audio saved for " + clipId; return; }
+  const a = new Audio(c.audioUrl);
+  a.currentTime = c.start || 0;
+  a.play().catch(() => { statusEl.textContent = "Playback blocked by browser."; });
+  if (c.end) a.ontimeupdate = () => { if (a.currentTime >= c.end) a.pause(); };
+}
+
+async function sendTurn(audioB64, transcript) {
+  statusEl.textContent = "Thinking…";
+  const res = await fetch("/api/turn", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history})
+  });
+  const data = await res.json();
+  history.push({role: "assistant", text: data.question});
+  (data.facts || []).forEach(f => facts.push(f));
+  // Remember latest clip blob for replay (server stores the .wav; browser keeps the slice).
+  if (lastBlobUrl && data.facts) {
+    data.facts.forEach(f => { if (f.clip_id) clips[f.clip_id] = {audioUrl: lastBlobUrl, start: f.start, end: f.end}; });
+  }
+  q.textContent = data.question;
+  speak(data.question);
+  renderFacts();
+  statusEl.textContent = "";
+}
+
+let lastBlobUrl = null, lastTranscript = "";
+
+// STT via Web Speech API when available; else send empty transcript (server keeps turn).
+function listenOnce() {
+  return new Promise(resolve => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return resolve("");
+    try {
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.interimResults = false;
+      rec.onresult = e => resolve(e.results[0][0].transcript || "");
+      rec.onerror = () => resolve("");
+      rec.onend = () => resolve(lastTranscript);
+      rec.start();
+      lastTranscript = "";
+      rec.onresult = e => { lastTranscript = e.results[0][0].transcript || ""; resolve(lastTranscript); };
+      setTimeout(() => { try { rec.stop(); } catch {} resolve(lastTranscript); }, 15000);
+    } catch { resolve(""); }
+  });
+}
+
+document.getElementById("start").onclick = async () => {
+  document.getElementById("start").disabled = true;
+  talkBtn.disabled = false;
+  document.getElementById("finish").disabled = false;
+  await sendTurn("", [{role: "user", text: "(begin interview)"}]);
+};
+
+talkBtn.onmousedown = talkBtn.ontouchstart = async (e) => {
+  e.preventDefault();
+  chunks = [];
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    recorder = new MediaRecorder(stream);
+    recorder.ondataavailable = ev => chunks.push(ev.data);
+    recorder.start();
+    statusEl.textContent = "Recording… release the button to stop.";
+    listenOnce().then(t => { lastTranscript = t; });
+  } catch {
+    statusEl.textContent = "Mic unavailable. Check browser permissions.";
+  }
+};
+
+talkBtn.onmouseup = talkBtn.ontouchend = async (e) => {
+  e.preventDefault();
+  if (!recorder || recorder.state === "inactive") return;
+  const done = new Promise(r => { recorder.onstop = r; });
+  recorder.stop();
+  await done;
+  stream.getTracks().forEach(t => t.stop());
+  const blob = new Blob(chunks, {type: recorder.mimeType || "audio/webm"});
+  lastBlobUrl = URL.createObjectURL(blob);
+  const b64 = await new Promise(res => {
+    const fr = new FileReader();
+    fr.onload = () => res(String(fr.result).split(",")[1] || "");
+    fr.readAsDataURL(blob);
+  });
+  history.push({role: "user", text: lastTranscript || "(no transcript)"});
+  await sendTurn(b64, lastTranscript);
+};
+
+document.getElementById("finish").onclick = () => {
+  speak("Thank you for sharing your story.");
+  statusEl.textContent = "Interview finished. Clips saved under recordings/" + sessionId + "/";
+  talkBtn.disabled = true;
+};
+</script>
+</body>
+</html>

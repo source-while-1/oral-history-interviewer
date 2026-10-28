@@ -1,0 +1,2 @@
+# No third-party dependencies: backend is stdlib-only (Python 3.9+).
+# Kept so `pip install -r requirements.txt` works as documented.
