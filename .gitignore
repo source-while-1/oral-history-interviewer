@@ -1,0 +1,18 @@
+# Secrets / local data — never commit
+.env
+recordings/
+
+# Raw audio clips (keep only a tiny synthetic sample if one is added)
+*.wav
+*.webm
+*.mp3
+*.m4a
+!sample-tone.wav
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Node
+node_modules/
