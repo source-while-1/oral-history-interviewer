@@ -22,9 +22,11 @@ see README "STT upgrade path".
 import base64
 import concurrent.futures
 import json
+import math
 import os
 import re
 import time
+import wave
 import urllib.request
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -68,6 +70,10 @@ def normalize_segments(raw):
             end = float(s.get("end", 0))
         except (TypeError, ValueError):
             start, end = 0.0, 0.0
+        if not math.isfinite(start):
+            start = 0.0
+        if not math.isfinite(end):
+            end = 0.0
         segs.append(
             {"id": sid, "text": str(s.get("text", "")), "start": start, "end": end}
         )
@@ -82,11 +88,14 @@ def resolve_fact_links(raw_facts, clip_id, seg_by_id):
     Exact ids always win over aliases.
     """
     aliases = {}
+    # Numeric-suffix aliases first (exact ids still win at resolve time),
+    # then positional-index aliases only where nothing is registered yet.
+    for sid in seg_by_id:
+        suffix = sid.rsplit("-", 1)[-1].rsplit("_", 1)[-1]
+        if suffix != sid and suffix not in seg_by_id:
+            aliases.setdefault(suffix, sid)
     for i, sid in enumerate(seg_by_id):
         aliases.setdefault(str(i), sid)
-        suffix = sid.rsplit("-", 1)[-1].rsplit("_", 1)[-1]
-        if suffix != sid:
-            aliases.setdefault(suffix, sid)
     facts = []
     for f in raw_facts or []:
         if not isinstance(f, dict):
@@ -158,8 +167,8 @@ def mock_llm_turn(history, transcript_text, segments):
                     "segment_ids": [segments[0]["id"]],
                 }
             ]
+        seen = set()
         for s in segments:
-            seen = set()
             for m in re.finditer(
                 r"\b(Aunt|Uncle|Grandma|Grandpa|Mother|Father|Granny|Cousin)"
                 r"\s+([A-Z][a-z]+)",
@@ -263,6 +272,72 @@ def run_llm_turn(history, transcript_text, segments):
         return q_future.result(), f_future.result()
 
 
+def write_silent_wav(path, seconds=1.0, framerate=8000):
+    """Write a valid silent wav so empty-audio turns stay playable."""
+    nframes = max(1, int(seconds * framerate))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(framerate)
+        w.writeframes(b"\x00" * nframes * 2)
+
+
+def clip_duration(path):
+    """Return wav duration in seconds, or None when unknown."""
+    try:
+        with wave.open(str(path), "rb") as w:
+            rate = w.getframerate() or 0
+            if rate <= 0:
+                return None
+            return w.getnframes() / float(rate)
+    except Exception:
+        return None
+
+
+def clamp_fact_range(start, end, duration):
+    """Clamp a fact slice into 0<=start<end<=duration; ordered fallback."""
+    try:
+        s = float(start)
+    except (TypeError, ValueError):
+        s = 0.0
+    try:
+        e = float(end)
+    except (TypeError, ValueError):
+        e = 0.0
+    if not math.isfinite(s):
+        s = 0.0
+    if not math.isfinite(e):
+        e = 0.0
+    if duration is None or not math.isfinite(duration) or duration <= 0:
+        if not e > s:
+            e = s + 1.0
+        return s, e
+    dur = float(duration)
+    s = min(max(s, 0.0), dur)
+    e = min(max(e, 0.0), dur)
+    if not e > s:
+        if s < dur:
+            e = min(dur, s + 1.0)
+            if not e > s:
+                e = dur
+                s = max(0.0, dur - 1.0)
+        else:
+            e = dur
+            s = max(0.0, dur - 1.0)
+    return s, e
+
+
+def sniff_audio_ctype(data):
+    """Sniff Content-Type from magic bytes; default audio/wav."""
+    if data[:4] == b"RIFF":
+        return "audio/wav"
+    if data[:4] == b"\x1a\x45\xdf\xa3":
+        return "audio/webm"
+    if data[:4] == b"OggS":
+        return "audio/ogg"
+    return "audio/wav"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OHI/0.2"
 
@@ -296,12 +371,22 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(ROOT / "index.html", "text/html; charset=utf-8")
         elif parsed.path == "/api/facts":
             qs = parse_qs(parsed.query)
-            session_id = (qs.get("session_id") or [""])[0]
-            facts_path = RECORDINGS / session_id / "facts.json" if session_id else None
-            if not facts_path or not facts_path.exists():
+            session_id = "".join(
+                c for c in (qs.get("session_id") or [""])[0]
+                if c.isalnum() or c in "-_"
+            )
+            facts_path = (RECORDINGS / session_id / "facts.json") if session_id else None
+            if (
+                not facts_path
+                or RECORDINGS not in facts_path.resolve().parents
+                or not facts_path.is_file()
+            ):
                 self._send_json({"facts": []})
             else:
-                self._send_json({"facts": json.loads(facts_path.read_text())})
+                try:
+                    self._send_json({"facts": json.loads(facts_path.read_text())})
+                except (ValueError, OSError):
+                    self._send_json({"facts": []})
         elif parsed.path == "/api/clip":
             qs = parse_qs(parsed.query)
             session_id = "".join(
@@ -324,7 +409,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
             else:
-                self._serve_file(clip_path, "audio/wav")
+                try:
+                    data = clip_path.read_bytes()
+                except OSError:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.send_header("Content-Type", sniff_audio_ctype(data))
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
         else:
             self.send_response(404)
             self.end_headers()
@@ -374,10 +469,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "audio_b64 is not valid base64"}, 400)
                 return
         else:
-            clip_path.write_bytes(b"")
+            write_silent_wav(clip_path)
 
         use_mock = os.environ.get("MOCK_LLM", "1") != "0"
         fallback_note = ""
+        fallback = False
         try:
             if use_mock:
                 question, facts = mock_llm_turn(history, transcript_text, segments)
@@ -415,11 +511,21 @@ class Handler(BaseHTTPRequestHandler):
                 seg_by_id,
             )
             fallback_note = f"(llm fallback: {e})"
+            fallback = True
+
+        duration = clip_duration(clip_path)
+        clamped = []
+        for f in facts:
+            s, e = clamp_fact_range(f.get("start", 0.0), f.get("end", 0.0), duration)
+            f["start"], f["end"] = s, e
+            clamped.append(f)
+        facts = clamped
 
         result = {
             "question": question or mock_llm_turn(history, transcript_text, segments)[0],
             "audio_text": (fallback_note + " " + transcript_text).strip(),
             "facts": facts,
+            "fallback": fallback,
         }
 
         # Append turn + persist facts.
@@ -430,7 +536,12 @@ class Handler(BaseHTTPRequestHandler):
                 "transcript": transcript_text, "segments": segments,
             }) + "\n")
         facts_path = session_dir / "facts.json"
-        existing = json.loads(facts_path.read_text()) if facts_path.exists() else []
+        try:
+            existing = json.loads(facts_path.read_text()) if facts_path.exists() else []
+            if not isinstance(existing, list):
+                existing = []
+        except (ValueError, OSError):
+            existing = []
         facts_path.write_text(json.dumps(existing + facts, indent=2))
 
         self._send_json(result)

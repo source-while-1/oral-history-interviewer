@@ -72,3 +72,55 @@ Recorded during setup. Each entry: decision + why.
   `FIREWORKS_FACTS_MAX_TOKENS`; (2) it cites `"0"` for `"seg-0"`, so
   `resolve_fact_links` now accepts index/numeric-suffix aliases (exact ids
   win). Verified live: warm follow-up + 5 clip-linked facts, no fallback.
+
+## 11. (a) Confine /api/facts like /api/clip
+- Cause: `GET /api/facts` used the raw `session_id` in a path join, so
+  `?session_id=../recordings/<victim>` read another session's facts (T1).
+- Fix: same alnum `+ -_` filter and `RECORDINGS in resolved.parents` guard
+  as `/api/clip`; anything else returns `{"facts": []}`.
+
+## 12. (b) Corrupt facts.json recovers to []
+- Cause: `json.loads` on a corrupt `facts.json` raised unhandled (GET 500)
+  and POST appended onto unreadable state (T2).
+- Fix: `try/except (ValueError, OSError)` on both paths; GET serves
+  `{"facts": []}`, POST resets to `[]` and keeps serving.
+
+## 13. (c) Alias priority: exact > numeric suffix > positional index
+- Cause: positional-index aliases were registered first, so with dict order
+  `{seg-1, seg-0}` the alias `"0"` bound to `seg-1` (T3).
+- Fix: register numeric-suffix aliases first, positional indexes second with
+  `setdefault` (never overwrite); exact ids still win at resolve time.
+
+## 14. (d) Clamp non-finite segment bounds
+- Cause: `NaN`/`inf` survived `float()` and flowed into fact slices (T4).
+- Fix: `math.isfinite` check in `normalize_segments` resets either to `0.0`.
+
+## 15. (e) Empty audio yields a playable 1s silent wav + clamped slices
+- Cause: empty `audio_b64` wrote 0 bytes, so the clip was unplayable and
+  facts cited a zero-length `0-0` range (T5).
+- Fix: stdlib `wave` writes 1s of silence; every fact is clamped into
+  `0<=start<end<=duration` (guarded; ordered-only fallback when unknown).
+
+## 16. (f) Turn response carries `fallback: bool`
+- Cause: the LLM-fallback path was invisible to the UI (T6).
+- Fix: `result["fallback"]` is `True` only when the except path ran.
+
+## 17. (g) Sniff /api/clip Content-Type from magic bytes
+- Cause: clips were always served as `audio/wav` even for browser `webm`/ogg
+  uploads. Fix: RIFF->wav, EBML->webm, OggS->ogg, default wav.
+
+## 18. (h) Stub `seen` set is per-turn, not per-segment
+- Cause: `seen` was re-created inside the segment loop, so a name repeated
+  across segments emitted duplicate person facts.
+- Fix: hoist `seen = set()` above the loop so cross-segment duplicates emit
+  once.
+
+## 19. (i) sendTurn shows errors + offline-answer note
+- Cause: `sendTurn` had no `try/catch` or `res.ok` check, so failures left
+  `#status` stuck on "Thinking…"; fallback answers looked identical (T7).
+- Fix: `try/catch` + `res.ok` check writes the error to `#status`; when
+  `response.fallback` is true the question gains an "(offline answer)" note.
+
+## 20. (j) replay() guards zero-length slices
+- Cause: `replay()` set `currentTime` past `end` with no guard and choked on
+  `end<=start` (T7). Fix: early return with a "clip too short" status.

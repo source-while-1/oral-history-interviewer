@@ -86,6 +86,7 @@ function renderFacts() {
 function replay(clipId) {
   const c = clips[clipId];
   if (!c || !c.audioUrl) { statusEl.textContent = "No audio saved for " + clipId; return; }
+  if (c.end != null && !(c.end > (c.start || 0))) { statusEl.textContent = "clip too short to replay"; return; }
   const a = new Audio(c.audioUrl);
   a.currentTime = c.start || 0;
   a.play().catch(() => { statusEl.textContent = "Playback blocked by browser."; });
@@ -94,27 +95,32 @@ function replay(clipId) {
 
 async function sendTurn(audioB64, transcript) {
   statusEl.textContent = "Thinking…";
-  // Browser STT default: transcript + one segment for this clip slice.
-  // A future server-side Fireworks-Whisper step can return finer segments
-  // without changing this schema (see README "STT upgrade path").
-  const text = typeof transcript === "string" ? transcript : (lastTranscript || "");
-  const segments = text ? [{id: "seg-0", text, start: 0, end: 0}] : [];
-  const res = await fetch("/api/turn", {
-    method: "POST",
-    headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments})
-  });
-  const data = await res.json();
-  history.push({role: "assistant", text: data.question});
-  (data.facts || []).forEach(f => facts.push(f));
-  // Remember latest clip blob for replay (server stores the .wav; browser keeps the slice).
-  if (lastBlobUrl && data.facts) {
-    data.facts.forEach(f => { if (f.clip_id) clips[f.clip_id] = {audioUrl: lastBlobUrl, start: f.start, end: f.end}; });
+  try {
+    // Browser STT default: transcript + one segment for this clip slice.
+    // A future server-side Fireworks-Whisper step can return finer segments
+    // without changing this schema (see README "STT upgrade path").
+    const text = typeof transcript === "string" ? transcript : (lastTranscript || "");
+    const segments = text ? [{id: "seg-0", text, start: 0, end: 0}] : [];
+    const res = await fetch("/api/turn", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments})
+    });
+    if (!res.ok) throw new Error("server error " + res.status);
+    const data = await res.json();
+    history.push({role: "assistant", text: data.question});
+    (data.facts || []).forEach(f => facts.push(f));
+    // Remember latest clip blob for replay (server stores the .wav; browser keeps the slice).
+    if (lastBlobUrl && data.facts) {
+      data.facts.forEach(f => { if (f.clip_id) clips[f.clip_id] = {audioUrl: lastBlobUrl, start: f.start, end: f.end}; });
+    }
+    q.textContent = data.question + (data.fallback ? " (offline answer)" : "");
+    speak(data.question);
+    renderFacts();
+    statusEl.textContent = data.fallback ? "Answered offline (fallback)." : "";
+  } catch (err) {
+    statusEl.textContent = "Could not reach the interviewer: " + (err && err.message ? err.message : err);
   }
-  q.textContent = data.question;
-  speak(data.question);
-  renderFacts();
-  statusEl.textContent = "";
 }
 
 let lastBlobUrl = null, lastTranscript = "";
