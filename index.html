@@ -63,7 +63,9 @@ function renderFacts() {
     tl.appendChild(li);
   });
   // Family map: unique people mentioned, laid out as SVG circles (no lib).
-  const people = [...new Set(facts.flatMap(f => f.people || []))];
+  // Person-kind facts carry the name as text; the extractor may also set people[].
+  const people = [...new Set(facts.flatMap(f =>
+    f.people && f.people.length ? f.people : (f.kind === "person" ? [f.text] : [])))];
   const svg = document.getElementById("map");
   svg.innerHTML = "";
   people.forEach((p, i) => {
@@ -182,6 +184,35 @@ document.getElementById("finish").onclick = () => {
   statusEl.textContent = "Interview finished. Clips saved under recordings/" + sessionId + "/";
   talkBtn.disabled = true;
 };
+
+// Replay mode: ?session=<id> loads saved facts and streams clips from the
+// server, so a recorded (or synthetic) interview replays with audio and map.
+// Used by demo/replay.py: open /?session=demo-synthetic after a replay run.
+(async function replayMode() {
+  const sid = new URLSearchParams(location.search).get("session");
+  if (!sid) return;
+  document.getElementById("sid").textContent = sid + " (replay)";
+  document.getElementById("start").disabled = true;
+  talkBtn.disabled = true;
+  document.getElementById("finish").disabled = true;
+  statusEl.textContent = "Loading replay…";
+  try {
+    const res = await fetch("/api/facts?session_id=" + encodeURIComponent(sid));
+    const data = await res.json();
+    facts = data.facts || [];
+    facts.forEach(f => {
+      if (f.clip_id) clips[f.clip_id] = {
+        audioUrl: "/api/clip?session_id=" + encodeURIComponent(sid)
+          + "&clip_id=" + encodeURIComponent(f.clip_id),
+        start: f.start, end: f.end
+      };
+    });
+    if (facts.length) q.textContent = "Replay of session " + sid + ". Click ▶ replay on any fact.";
+    else q.textContent = "No saved facts for session " + sid + ".";
+    renderFacts();
+  } catch { q.textContent = "Could not load replay for session " + sid + "."; }
+  statusEl.textContent = "";
+})();
 </script>
 </body>
 </html>

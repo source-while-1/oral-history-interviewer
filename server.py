@@ -23,6 +23,7 @@ import base64
 import concurrent.futures
 import json
 import os
+import re
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -93,22 +94,30 @@ def resolve_fact_links(raw_facts, clip_id, seg_by_id):
             seg_id = seg_ids[0]
         else:
             start, end, seg_id = 0.0, 0.0, ""
-        facts.append(
-            {
-                "kind": kind,
-                "text": text,
-                "when": str(f.get("when", "")),
-                "clip_id": clip_id,
-                "start": start,
-                "end": end,
-                "segment_id": seg_id,
-            }
-        )
+        fact = {
+            "kind": kind,
+            "text": text,
+            "when": str(f.get("when", "")),
+            "clip_id": clip_id,
+            "start": start,
+            "end": end,
+            "segment_id": seg_id,
+        }
+        people = f.get("people")
+        if isinstance(people, list) and people:
+            fact["people"] = [str(p) for p in people if str(p).strip()]
+        facts.append(fact)
     return facts
 
 
 def mock_llm_turn(history, transcript_text, segments):
-    """Deterministic stub: next question + one linked demo fact for non-empty turns."""
+    """Deterministic stub: next question + linked demo facts for non-empty turns.
+
+    STUB-ONLY heuristic: besides the whole-turn event fact, emit one person
+    fact per "Title Name" mention (e.g. "Aunt Rosa") so the offline demo and
+    synthetic replay show the family map filling in. The real Fireworks path
+    extracts people via JSON mode instead; this regex never runs there.
+    """
     n = len(history) if isinstance(history, list) else 0
     questions = [
         "Where did you grow up, and what do you remember most about it?",
@@ -120,14 +129,34 @@ def mock_llm_turn(history, transcript_text, segments):
     raw = []
     t = (transcript_text or "").strip()
     if t and t != "(begin interview)":
-        raw = [
-            {
-                "kind": "event",
-                "text": t[:160],
-                "when": "",
-                "segment_ids": [segments[0]["id"]] if segments else [],
-            }
-        ]
+        if segments:
+            raw = [
+                {
+                    "kind": "event",
+                    "text": t[:160],
+                    "when": "",
+                    "segment_ids": [segments[0]["id"]],
+                }
+            ]
+        for s in segments:
+            seen = set()
+            for m in re.finditer(
+                r"\b(Aunt|Uncle|Grandma|Grandpa|Mother|Father|Granny|Cousin)"
+                r"\s+([A-Z][a-z]+)",
+                s.get("text", ""),
+            ):
+                name = f"{m.group(1)} {m.group(2)}"
+                if name not in seen:
+                    seen.add(name)
+                    raw.append(
+                        {
+                            "kind": "person",
+                            "text": name,
+                            "when": "",
+                            "people": [name],
+                            "segment_ids": [s["id"]],
+                        }
+                    )
     return question, resolve_fact_links(raw, "mock-clip", seg_by_id)
 
 
@@ -253,6 +282,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"facts": []})
             else:
                 self._send_json({"facts": json.loads(facts_path.read_text())})
+        elif parsed.path == "/api/clip":
+            qs = parse_qs(parsed.query)
+            session_id = "".join(
+                c for c in (qs.get("session_id") or [""])[0]
+                if c.isalnum() or c in "-_"
+            )
+            clip_id = "".join(
+                c for c in (qs.get("clip_id") or [""])[0]
+                if c.isalnum() or c in "-_"
+            )
+            clip_path = (RECORDINGS / session_id / (clip_id + ".wav")) if (
+                session_id and clip_id
+            ) else None
+            # Confine to the session dir: no traversal, must be a real file.
+            if (
+                not clip_path
+                or RECORDINGS not in clip_path.resolve().parents
+                or not clip_path.is_file()
+            ):
+                self.send_response(404)
+                self.end_headers()
+            else:
+                self._serve_file(clip_path, "audio/wav")
         else:
             self.send_response(404)
             self.end_headers()
@@ -315,6 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                             "kind": f["kind"],
                             "text": f["text"],
                             "when": f["when"],
+                            "people": f.get("people", []),
                             "segment_ids": [f.get("segment_id")] if f.get("segment_id") else [],
                         }
                         for f in facts
@@ -333,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
                         "kind": f["kind"],
                         "text": f["text"],
                         "when": f["when"],
+                        "people": f.get("people", []),
                         "segment_ids": [f.get("segment_id")] if f.get("segment_id") else [],
                     }
                     for f in facts

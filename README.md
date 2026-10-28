@@ -12,7 +12,8 @@ See [SPEC.md](./SPEC.md) and [DECISIONS.md](./DECISIONS.md).
 
 ## Layout
 
-- `server.py` — stdlib-only backend; `POST /api/turn`, `GET /api/facts`
+- `server.py` — stdlib-only backend; `POST /api/turn`, `GET /api/facts`,
+  `GET /api/clip`; `demo/` synthetic backup demo; `test_demo.py` linkage tests
 - `index.html` — single static frontend (no build step): push-to-talk via
   MediaRecorder, question playback via speechSynthesis, timeline list +
   SVG family map, click-to-replay clip slices
@@ -58,6 +59,33 @@ never committed), `FIREWORKS_MODEL`, `FIREWORKS_BASE_URL` (default
   `{FIREWORKS_BASE_URL}/audio/transcriptions` with `FIREWORKS_STT_MODEL`
   (e.g. Whisper) to get word/segment timestamps, then fill `segments` before
   the LLM calls. No schema change needed.
+
+## Synthetic demo (backup for the live interview)
+
+All-fictional 3-turn interview with generated silent clips — no mic, no
+keys, no network. Feeds `demo/script.json` through the server, then serves
+a replay with timeline, map, and clip audio:
+
+```sh
+python3 demo/replay.py
+# open http://127.0.0.1:8000/?session=demo-synthetic
+```
+
+`GET /api/clip?session_id=…&clip_id=…` serves stored wavs (404 on unknown
+or traversal-y ids); `/?session=<id>` loads any saved session read-only.
+Details in [demo/README.md](demo/README.md).
+
+## Demo tests
+
+```sh
+python3 test_demo.py
+```
+
+1. Feeds the synthetic script through a MOCK server and asserts every fact
+   cites a real clip slice (`0 <= start < end <= wav duration`), kinds are
+   valid, and the map people (Aunt Rosa, Grandpa Emil) surface.
+2. Asserts `/api/clip` returns byte-identical audio, 404s cleanly, and
+   `index.html` carries the `?session=` replay hook.
 
 ## Smoke test (stubbed LLM, proves fact→clip linkage)
 

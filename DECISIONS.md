@@ -44,4 +44,20 @@ Recorded during setup. Each entry: decision + why.
 - Why: FastAPI gives typed routes + static serving in few lines; if the
   environment lacks it, `http.server` stdlib covers v1 needs. Either way the
   contract is: serve `/`, accept turn uploads, append JSONL, call Fireworks.
-  Final choice recorded at backend implementation time.
+  Final choice: stdlib `http.server` (zero deps, instant cold start).
+
+## 8. Synthetic demo over a recorded real interview
+- Why: a real recording would put a teammate's voice/name in a public repo
+  forever. `demo/` is all-fictional (invented people/places, generated
+  silence sized to the timestamps) and exercises the same path the browser
+  uses: POST /api/turn with transcript+segments, saved clips, replay via
+  `/?session=`. Doubles as the venue-Wi-Fi backup demo.
+
+## 9. Clip serving + read-only session replay
+- Choice: `GET /api/clip?session_id=&clip_id=` serves stored wavs with
+  alnum-only id filters and a parents-containment check (no traversal);
+  `/?session=<id>` loads `/api/facts` and maps clips to `/api/clip` URLs so
+  any saved session replays with audio, timeline, and map.
+- Stub-only person heuristic (`Title Name` regex in `mock_llm_turn`) so the
+  offline/MOCK path also fills the family map; the real Fireworks path never
+  runs it (JSON-mode extraction instead). Documented as stub behavior.
