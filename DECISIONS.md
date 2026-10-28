@@ -61,3 +61,14 @@ Recorded during setup. Each entry: decision + why.
 - Stub-only person heuristic (`Title Name` regex in `mock_llm_turn`) so the
   offline/MOCK path also fills the family map; the real Fireworks path never
   runs it (JSON-mode extraction instead). Documented as stub behavior.
+
+## 10. Live model: muse-spark-open (verified 2026-10-28)
+- The placeholder `llama-v3p1-8b-instruct` 404s on this account (stale
+  catalog id). `/models` lists 29 serverless ids, no Llama; picked
+  `muse-spark-open` (matches the team's Meta Muse access).
+- Two model quirks fixed server-side: (1) it is a reasoning model, so the
+  96/512 token budgets truncated answers to `""` — budgets raised to
+  1024/2048, env-overridable via `FIREWORKS_FOLLOWUP_MAX_TOKENS` /
+  `FIREWORKS_FACTS_MAX_TOKENS`; (2) it cites `"0"` for `"seg-0"`, so
+  `resolve_fact_links` now accepts index/numeric-suffix aliases (exact ids
+  win). Verified live: warm follow-up + 5 clip-linked facts, no fallback.

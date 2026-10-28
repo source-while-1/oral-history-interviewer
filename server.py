@@ -44,8 +44,10 @@ FIREWORKS_MODEL = os.environ.get(
 FIREWORKS_STT_MODEL = os.environ.get("FIREWORKS_STT_MODEL", "whisper-v3-turbo")
 
 FACT_KINDS = ("person", "place", "event", "relationship")
-FOLLOWUP_MAX_TOKENS = 96
-FACTS_MAX_TOKENS = 512
+# Generous budgets: reasoning-style models (e.g. muse-spark-open) spend tokens
+# on reasoning traces before the answer; small budgets truncate to "".
+FOLLOWUP_MAX_TOKENS = int(os.environ.get("FIREWORKS_FOLLOWUP_MAX_TOKENS", "1024"))
+FACTS_MAX_TOKENS = int(os.environ.get("FIREWORKS_FACTS_MAX_TOKENS", "2048"))
 
 
 def utcnow_iso():
@@ -73,7 +75,18 @@ def normalize_segments(raw):
 
 
 def resolve_fact_links(raw_facts, clip_id, seg_by_id):
-    """Map segment_ids -> (clip_id, start, end). Every fact cites a clip slice."""
+    """Map segment_ids -> (clip_id, start, end). Every fact cites a clip slice.
+
+    Models sometimes return shortened ids ("0" for "seg-0"), so each known
+    segment also registers aliases: its bare index and any numeric suffix.
+    Exact ids always win over aliases.
+    """
+    aliases = {}
+    for i, sid in enumerate(seg_by_id):
+        aliases.setdefault(str(i), sid)
+        suffix = sid.rsplit("-", 1)[-1].rsplit("_", 1)[-1]
+        if suffix != sid:
+            aliases.setdefault(suffix, sid)
     facts = []
     for f in raw_facts or []:
         if not isinstance(f, dict):
@@ -87,7 +100,14 @@ def resolve_fact_links(raw_facts, clip_id, seg_by_id):
         seg_ids = f.get("segment_ids") or []
         if isinstance(seg_ids, str):
             seg_ids = [seg_ids]
-        seg_ids = [str(s) for s in seg_ids if str(s) in seg_by_id]
+        resolved = []
+        for s in seg_ids:
+            s = str(s)
+            if s in seg_by_id:
+                resolved.append(s)
+            elif s in aliases:
+                resolved.append(aliases[s])
+        seg_ids = resolved
         if seg_ids:
             seg = seg_by_id[seg_ids[0]]
             start, end = seg["start"], seg["end"]
