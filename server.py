@@ -1,14 +1,26 @@
 """Minimal oral-history-interviewer backend (stdlib only).
 
-POST /api/turn  {session_id, audio_b64, history} -> {question, audio_text, facts}
+POST /api/turn  {session_id, audio_b64, history, transcript, segments}
+  -> {question, audio_text, facts}
 GET  /          serves index.html (single static frontend, no build step)
 GET  /api/facts?session_id=...  returns saved facts for a session
 
 Storage: recordings/<session>/<clip>.wav + transcript.jsonl (gitignored).
-LLM is stubbed; real Fireworks wiring comes next. MOCK_LLM=1 (default) forces stub.
+LLM: Fireworks via OpenAI-compatible chat-completions endpoint. Two
+concurrent calls per turn: (1) warm single-question follow-up (short
+max_tokens), (2) JSON-mode fact extraction
+{kind: person|place|event|relationship, text, when, segment_ids}.
+segment_ids are mapped server-side to (clip_id, start, end) so every
+persisted fact cites a clip slice. MOCK_LLM=1 (default) forces stub.
+
+STT default: browser Web Speech API (offline demo, no key). The turn
+endpoint already accepts transcript segments, so a future server-side
+Fireworks Whisper step can fill `segments` without changing the schema;
+see README "STT upgrade path".
 """
 
 import base64
+import concurrent.futures
 import json
 import os
 import time
@@ -20,58 +32,190 @@ from urllib.parse import parse_qs, urlparse
 
 ROOT = Path(__file__).resolve().parent
 RECORDINGS = ROOT / "recordings"
-FIREWORKS_URL = "https://api.fireworks.ai/inference/v1/chat/completions"
-FIREWORKS_MODEL = os.environ.get("FIREWORKS_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct")
+FIREWORKS_BASE_URL = os.environ.get(
+    "FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1"
+).rstrip("/")
+FIREWORKS_URL = FIREWORKS_BASE_URL + "/chat/completions"
+FIREWORKS_MODEL = os.environ.get(
+    "FIREWORKS_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct"
+)
+# Reserved for the documented server-side STT upgrade path (not called in v1).
+FIREWORKS_STT_MODEL = os.environ.get("FIREWORKS_STT_MODEL", "whisper-v3-turbo")
+
+FACT_KINDS = ("person", "place", "event", "relationship")
+FOLLOWUP_MAX_TOKENS = 96
+FACTS_MAX_TOKENS = 512
 
 
 def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-def mock_turn(history):
-    """Deterministic stub: next question + zero or one demo fact."""
+def normalize_segments(raw):
+    """Normalize caller-supplied transcript segments to [{id,text,start,end}]."""
+    segs = []
+    if not isinstance(raw, list):
+        return segs
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get("id") or f"seg-{i}")
+        try:
+            start = float(s.get("start", 0))
+            end = float(s.get("end", 0))
+        except (TypeError, ValueError):
+            start, end = 0.0, 0.0
+        segs.append(
+            {"id": sid, "text": str(s.get("text", "")), "start": start, "end": end}
+        )
+    return segs
+
+
+def resolve_fact_links(raw_facts, clip_id, seg_by_id):
+    """Map segment_ids -> (clip_id, start, end). Every fact cites a clip slice."""
+    facts = []
+    for f in raw_facts or []:
+        if not isinstance(f, dict):
+            continue
+        kind = str(f.get("kind", ""))
+        if kind not in FACT_KINDS:
+            continue
+        text = str(f.get("text", "")).strip()
+        if not text:
+            continue
+        seg_ids = f.get("segment_ids") or []
+        if isinstance(seg_ids, str):
+            seg_ids = [seg_ids]
+        seg_ids = [str(s) for s in seg_ids if str(s) in seg_by_id]
+        if seg_ids:
+            seg = seg_by_id[seg_ids[0]]
+            start, end = seg["start"], seg["end"]
+            seg_id = seg_ids[0]
+        else:
+            start, end, seg_id = 0.0, 0.0, ""
+        facts.append(
+            {
+                "kind": kind,
+                "text": text,
+                "when": str(f.get("when", "")),
+                "clip_id": clip_id,
+                "start": start,
+                "end": end,
+                "segment_id": seg_id,
+            }
+        )
+    return facts
+
+
+def mock_llm_turn(history, transcript_text, segments):
+    """Deterministic stub: next question + one linked demo fact for non-empty turns."""
     n = len(history) if isinstance(history, list) else 0
     questions = [
         "Where did you grow up, and what do you remember most about it?",
         "Can you tell me about a person who shaped your childhood?",
         "What is a moment you are proud of that we should record?",
     ]
-    return {
-        "question": questions[n % len(questions)],
-        "audio_text": "",
-        "facts": [],
-    }
+    question = questions[n % len(questions)]
+    seg_by_id = {s["id"]: s for s in segments}
+    raw = []
+    t = (transcript_text or "").strip()
+    if t and t != "(begin interview)":
+        raw = [
+            {
+                "kind": "event",
+                "text": t[:160],
+                "when": "",
+                "segment_ids": [segments[0]["id"]] if segments else [],
+            }
+        ]
+    return question, resolve_fact_links(raw, "mock-clip", seg_by_id)
 
 
-def call_fireworks(history):
-    """Real LLM path (wiring placeholder). Raises on any failure -> caller falls back."""
+def _post_chat(messages, response_format=None, max_tokens=128, temperature=0.5):
+    """POST to the Fireworks OpenAI-compatible chat endpoint. Key from env only."""
     api_key = os.environ.get("FIREWORKS_API_KEY", "")
     if not api_key:
         raise RuntimeError("FIREWORKS_API_KEY not set")
-    messages = [
-        {"role": "system", "content": (
-            "You are a gentle oral-history interviewer. Given the conversation "
-            "history, ask ONE short open-ended follow-up question and extract "
-            "facts as JSON. Reply ONLY as JSON: "
-            '{"question": str, "audio_text": str, '
-            '"facts": [{"kind": str, "text": str, "when": str}]}.'
-        )},
-        {"role": "user", "content": json.dumps(history)[-6000:]},
-    ]
+    payload = {"model": FIREWORKS_MODEL, "messages": messages}
+    if response_format is not None:
+        payload["response_format"] = response_format
+    payload["max_tokens"] = max_tokens
+    payload["temperature"] = temperature
     req = urllib.request.Request(
         FIREWORKS_URL,
-        data=json.dumps({"model": FIREWORKS_MODEL, "messages": messages}).encode(),
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": "Bearer " + api_key,
+            "Content-Type": "application/json",
+        },
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
         body = json.loads(resp.read().decode())
-    content = body["choices"][0]["message"]["content"]
-    return json.loads(content)
+    return body["choices"][0]["message"]["content"]
+
+
+def gen_followup(history, transcript_text):
+    """Call 1: one warm open-ended follow-up question (short max_tokens)."""
+    history_tail = json.dumps(history)[-4000:]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a gentle oral-history interviewer. Ask ONE short "
+                "warm open-ended follow-up question (under 25 words). "
+                "Reply with the question text only, no JSON, no quotes."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"History: {history_tail}\nLatest turn: {transcript_text[-1500:]}",
+        },
+    ]
+    return _post_chat(messages, max_tokens=FOLLOWUP_MAX_TOKENS, temperature=0.6).strip()
+
+
+def extract_facts_raw(transcript_text, valid_ids):
+    """Call 2: JSON-mode fact extraction with segment_ids citing transcript segments."""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "Extract facts from one interview turn. Reply ONLY as JSON: "
+                '{"facts": [{"kind": "person|place|event|relationship", '
+                '"text": str, "when": str, "segment_ids": [str]}]}. '
+                f"kind must be one of person/place/event/relationship. "
+                f"segment_ids must cite these ids (or [] if none apply): {valid_ids}."
+            ),
+        },
+        {"role": "user", "content": transcript_text[-4000:] or "(no transcript)"},
+    ]
+    content = _post_chat(
+        messages,
+        response_format={"type": "json_object"},
+        max_tokens=FACTS_MAX_TOKENS,
+        temperature=0.0,
+    )
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return []
+    facts = parsed.get("facts", parsed if isinstance(parsed, list) else [])
+    return facts if isinstance(facts, list) else []
+
+
+def run_llm_turn(history, transcript_text, segments):
+    """Run follow-up + fact extraction concurrently; return (question, raw_facts)."""
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        q_future = pool.submit(gen_followup, history, transcript_text)
+        f_future = pool.submit(
+            extract_facts_raw, transcript_text, [s["id"] for s in segments]
+        )
+        return q_future.result(), f_future.result()
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "OHI/0.1"
+    server_version = "OHI/0.2"
 
     def log_message(self, *args):
         pass
@@ -131,6 +275,21 @@ class Handler(BaseHTTPRequestHandler):
         session_id = "".join(c for c in session_id if c.isalnum() or c in "-_") or "default"
         history = payload.get("history") or []
         audio_b64 = payload.get("audio_b64") or ""
+        # STT input: browser transcript by default; server-side Whisper can
+        # later fill `segments` without changing this schema.
+        transcript_text = str(
+            payload.get("transcript") or payload.get("audio_text") or ""
+        )
+        if not transcript_text and history and isinstance(history[-1], dict):
+            last = history[-1]
+            if last.get("role") == "user":
+                transcript_text = str(last.get("text", ""))
+        segments = normalize_segments(payload.get("segments"))
+        if transcript_text and not segments:
+            segments = [
+                {"id": "seg-0", "text": transcript_text, "start": 0.0, "end": 0.0}
+            ]
+        seg_by_id = {s["id"]: s for s in segments}
 
         session_dir = RECORDINGS / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
@@ -146,27 +305,55 @@ class Handler(BaseHTTPRequestHandler):
             clip_path.write_bytes(b"")
 
         use_mock = os.environ.get("MOCK_LLM", "1") != "0"
+        fallback_note = ""
         try:
-            result = mock_turn(history) if use_mock else call_fireworks(history)
+            if use_mock:
+                question, facts = mock_llm_turn(history, transcript_text, segments)
+                facts = resolve_fact_links(
+                    [
+                        {
+                            "kind": f["kind"],
+                            "text": f["text"],
+                            "when": f["when"],
+                            "segment_ids": [f.get("segment_id")] if f.get("segment_id") else [],
+                        }
+                        for f in facts
+                    ],
+                    clip_id,
+                    seg_by_id,
+                )
+            else:
+                question, raw_facts = run_llm_turn(history, transcript_text, segments)
+                facts = resolve_fact_links(raw_facts, clip_id, seg_by_id)
         except Exception as e:  # fall back to stub so the loop stays runnable
-            result = mock_turn(history)
-            result["audio_text"] = f"(llm fallback: {e})"
+            question, facts = mock_llm_turn(history, transcript_text, segments)
+            facts = resolve_fact_links(
+                [
+                    {
+                        "kind": f["kind"],
+                        "text": f["text"],
+                        "when": f["when"],
+                        "segment_ids": [f.get("segment_id")] if f.get("segment_id") else [],
+                    }
+                    for f in facts
+                ],
+                clip_id,
+                seg_by_id,
+            )
+            fallback_note = f"(llm fallback: {e})"
 
-        # Attach citation (clip slice; whole-clip offsets for the stub).
-        facts = result.get("facts") or []
-        for f in facts:
-            f.setdefault("clip_id", clip_id)
-            f.setdefault("start", 0)
-            f.setdefault("end", 0)
-        result["facts"] = facts
-        result.setdefault("question", mock_turn(history)["question"])
-        result.setdefault("audio_text", "")
+        result = {
+            "question": question or mock_llm_turn(history, transcript_text, segments)[0],
+            "audio_text": (fallback_note + " " + transcript_text).strip(),
+            "facts": facts,
+        }
 
         # Append turn + persist facts.
         with open(session_dir / "transcript.jsonl", "a") as fh:
             fh.write(json.dumps({
                 "ts": utcnow_iso(), "clip_id": clip_id,
                 "history_len": len(history), "question": result["question"],
+                "transcript": transcript_text, "segments": segments,
             }) + "\n")
         facts_path = session_dir / "facts.json"
         existing = json.loads(facts_path.read_text()) if facts_path.exists() else []

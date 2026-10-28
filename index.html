@@ -92,10 +92,15 @@ function replay(clipId) {
 
 async function sendTurn(audioB64, transcript) {
   statusEl.textContent = "Thinking…";
+  // Browser STT default: transcript + one segment for this clip slice.
+  // A future server-side Fireworks-Whisper step can return finer segments
+  // without changing this schema (see README "STT upgrade path").
+  const text = typeof transcript === "string" ? transcript : (lastTranscript || "");
+  const segments = text ? [{id: "seg-0", text, start: 0, end: 0}] : [];
   const res = await fetch("/api/turn", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history})
+    body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments})
   });
   const data = await res.json();
   history.push({role: "assistant", text: data.question});
