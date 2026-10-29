@@ -1,4 +1,7 @@
-"""Render demo/demo_v2.mp4: a ~90s explainer of the full 3-turn demo.
+"""Render demo_v3 light/dark explainers: the ~90s v2 story with a designed theme.
+
+Pure Pillow frames (1280x720@30fps) piped to ffmpeg/libx264. All people,
+places, and events are fictional (Aunt Rosa, Grandpa Emil, Ohio farm).
 
 Pure Pillow frames (1280x720@30fps) piped to ffmpeg/libx264. All people,
 places, and events are fictional (Aunt Rosa, Grandpa Emil, Ohio farm).
@@ -23,15 +26,60 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFont
 
 W, H, FPS = 1280, 720, 30
 INK, MUTED, LINE, ACCENT, PANEL = (
     (20, 32, 28), (75, 85, 99), (216, 220, 217), (14, 107, 94), (244, 245, 244))
+CARD = (255, 255, 255)
+BG = (251, 252, 251)
+MAPDIM = 1.0
+THEME_NAME = "light"
 SKIN, GRAYH, BROWNH, SHIRT_R, SHIRT_E, SHIRT_K = (
     (242, 205, 170), (155, 155, 160), (90, 70, 55),
     (150, 110, 130), (70, 110, 140), (110, 150, 110))
 GOLD = (176, 130, 30)
+
+THEMES = {
+    "light": {
+        "BG": (251, 252, 251), "INK": (20, 32, 28), "MUTED": (75, 85, 99),
+        "LINE": (216, 220, 217), "ACCENT": (14, 107, 94),
+        "PANEL": (244, 245, 244), "CARD": (255, 255, 255), "MAPDIM": 1.0,
+        "KIND": {"person": (220, 235, 228), "place": (224, 232, 244),
+                 "event": (246, 236, 220)},
+    },
+    "dark": {
+        "BG": (16, 23, 21), "INK": (237, 243, 239), "MUTED": (157, 176, 168),
+        "LINE": (42, 56, 51), "ACCENT": (53, 208, 165),
+        "PANEL": (22, 33, 29), "CARD": (26, 38, 33), "MAPDIM": 0.55,
+        "KIND": {"person": (30, 58, 48), "place": (32, 52, 80),
+                 "event": (80, 62, 34)},
+    },
+}
+
+SCENE_KICKER = {"title": "00 · INTRO", "talk": "01 · TALK", "graph": "02 · THINK",
+                "map": "03 · MAP", "records": "04 · SAVE", "payoff": "05 · PAYOFF",
+                "outro": "06 · OUTRO"}
+
+
+def set_theme(name):
+    global BG, INK, MUTED, LINE, ACCENT, PANEL, CARD, MAPDIM, KIND_FILL, THEME_NAME
+    t = THEMES[name]
+    BG, INK, MUTED, LINE, ACCENT, PANEL, CARD = (
+        t["BG"], t["INK"], t["MUTED"], t["LINE"], t["ACCENT"], t["PANEL"], t["CARD"])
+    MAPDIM = t["MAPDIM"]
+    KIND_FILL = dict(t["KIND"])
+    THEME_NAME = name
+
+
+def chrome(d, f, idx, overall):
+    """Section chrome: kicker header + footer progress (theme-aware)."""
+    text(d, (80, 22), SCENE_KICKER[SCENES[idx][0]], f["tiny"], fill=ACCENT)
+    d.line([(80, 50), (1200, 50)], fill=LINE, width=2)
+    d.rectangle([80, H - 22, 1200, H - 16], fill=LINE)
+    d.rectangle([80, H - 22, 80 + int(1120 * overall), H - 16], fill=ACCENT)
+    text(d, (1200, H - 34), f"demo v3 · {THEME_NAME} · scene {idx + 1}/{len(SCENES)}",
+         f["tiny"], fill=MUTED, anchor="ra")
 
 REPO = "https://github.com/source-while-1/oral-history-interviewer"
 OSM_CREDIT = "Map: \u00a9 OpenStreetMap contributors"
@@ -130,8 +178,9 @@ def fonts():
     }
 
 
-def text(draw, xy, s, font, fill=INK, anchor="la"):
-    draw.text(xy, s, font=font, fill=fill, anchor=anchor)
+def text(draw, xy, s, font, fill=None, anchor="la"):
+    # NB: fill resolves INK at call time so set_theme() takes effect.
+    draw.text(xy, s, font=font, fill=INK if fill is None else fill, anchor=anchor)
 
 
 def wrap(draw, s, font, max_w):
@@ -151,10 +200,10 @@ def wrap(draw, s, font, max_w):
 def bubble(draw, x, y, w, lines, font, lh=38, pad=18, tail_left=True):
     h = len(lines) * lh + pad * 2
     draw.rounded_rectangle([x, y, x + w, y + h], radius=14,
-                           fill="white", outline=LINE, width=2)
+                           fill=CARD, outline=LINE, width=2)
     ty = y + 40
     if tail_left:
-        draw.polygon([(x - 18, ty), (x + 2, ty - 12), (x + 2, ty + 12)], fill="white")
+        draw.polygon([(x - 18, ty), (x + 2, ty - 12), (x + 2, ty + 12)], fill=CARD)
         draw.line([(x - 18, ty), (x + 2, ty - 12)], fill=LINE, width=2)
         draw.line([(x - 18, ty), (x + 2, ty + 12)], fill=LINE, width=2)
     for i, ln in enumerate(lines):
@@ -299,6 +348,8 @@ def frame_map(img, d, f, p):
     big = bm.resize((rw, rh), Image.BILINEAR)
     big = big.crop(((rw - pw) // 2, (rh - ph) // 2,
                     (rw + pw) // 2, (rh + ph) // 2))
+    if MAPDIM < 1.0:  # dark theme: dim the photographic basemap
+        big = ImageEnhance.Brightness(big).enhance(MAPDIM)
     img.paste(big, (px, py))
     d.rectangle([px, py, px + pw, py + ph], outline=LINE, width=2)
 
@@ -334,7 +385,7 @@ def frame_map(img, d, f, p):
             label = f"{km:.1f} km"
             tw = d.textlength(label, font=f["tiny"]) + 16
             d.rounded_rectangle([mx - tw / 2, my - 16, mx + tw / 2, my + 16],
-                                radius=6, fill="white", outline=GOLD, width=2)
+                                radius=6, fill=CARD, outline=GOLD, width=2)
             text(d, (mx, my), label, f["tiny"], anchor="mm")
     for name, cx, cy, lat, lon in drops:
         d.ellipse([cx - 13, cy - 13, cx + 13, cy + 13], fill=(180, 40, 40),
@@ -342,7 +393,7 @@ def frame_map(img, d, f, p):
         d.polygon([(cx - 8, cy + 8), (cx + 8, cy + 8), (cx, cy + 24)], fill=(180, 40, 40))
         lw = d.textlength(name, font=f["tiny"]) + 20
         ly = min(cy - 52, py + ph - 40) if cy > py + 120 else cy + 30
-        d.rounded_rectangle([cx - lw / 2, ly, cx + lw / 2, ly + 32], radius=6, fill="white")
+        d.rounded_rectangle([cx - lw / 2, ly, cx + lw / 2, ly + 32], radius=6, fill=CARD)
         text(d, (cx, ly + 16), name, f["tiny"], anchor="mm")
     text(d, (px, py + ph + 26), OSM_CREDIT, f["tiny"], fill=MUTED)
     text(d, (px + pw, py + ph + 26), "same 3 fictional points as the graph",
@@ -416,25 +467,33 @@ PREVIEW_P = {"title": 0.7, "talk": 0.8, "graph": 0.95, "map": 0.95,
              "records": 0.95, "payoff": 0.95, "outro": 0.95}
 
 
-def render_frame(name, p, f):
-    img = Image.new("RGB", (W, H), "white")
+def render_frame(name, p, f, scene_idx=0, overall=0.0):
+    img = Image.new("RGB", (W, H), BG)
     d = ImageDraw.Draw(img)
     FUNCS[name](img, d, f, p)
+    chrome(d, f, scene_idx, overall)
     return img
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(HERE / "demo_v2.mp4"))
+    ap.add_argument("--theme", choices=tuple(THEMES), default="light")
+    ap.add_argument("--out", default=None,
+                    help="default: demo/demo_v3_<theme>.mp4")
     ap.add_argument("--preview", action="store_true",
-                    help="write one PNG per scene to /tmp/v2prev instead of video")
+                    help="write one PNG per scene to /tmp/v3prev instead of video")
     args = ap.parse_args()
+    set_theme(args.theme)
+    if args.out is None:
+        args.out = str(HERE / f"demo_v3_{args.theme}.mp4")
     f = fonts()
     if args.preview:
-        out = Path("/tmp/v2prev")
+        out = Path(f"/tmp/v3prev_{args.theme}")
         out.mkdir(parents=True, exist_ok=True)
-        for name, _ in SCENES:
-            render_frame(name, PREVIEW_P[name], f).save(out / f"{name}.png")
+        for idx, (name, _) in enumerate(SCENES):
+            render_frame(name, PREVIEW_P[name], f, idx,
+                         sum(s for _, s in SCENES[:idx]) / sum(s for _, s in SCENES)
+                         ).save(out / f"{name}.png")
             print(f"wrote {out / f'{name}.png'}")
         return
     basemap()  # fail fast before opening ffmpeg
@@ -446,11 +505,15 @@ def main():
          "-movflags", "+faststart", args.out],
         stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     n = 0
+    done = 0
     try:
-        for name, secs in SCENES:
+        for idx, (name, secs) in enumerate(SCENES):
             for k in range(secs * FPS):
-                ff.stdin.write(render_frame(name, k / (secs * FPS), f).tobytes())
+                overall = (done + k) / total
+                ff.stdin.write(render_frame(name, k / (secs * FPS), f,
+                                            idx, overall).tobytes())
                 n += 1
+            done += secs * FPS
     finally:
         ff.stdin.close()
         rc = ff.wait()

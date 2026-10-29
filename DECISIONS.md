@@ -154,3 +154,13 @@ Recorded during setup. Each entry: decision + why.
 - Stats bound to script: turn/segment/fact counts on the records and payoff
   scenes are read from `demo/script.json` at render time (3 turns,
   6 segments, 6 rows), so the video cannot drift from the demo it depicts.
+
+## 23. v3 video restyle: light + dark themes with section chrome
+- Why: v2 was legible but bland (black on white, no sections). v3 adds a
+  `THEMES` palette dict, per-scene kickers ("03 · MAP"), and a footer
+  progress bar — same story, designed. Both themes render from one script
+  (`--theme light|dark` → `demo_v3_light.mp4` / `demo_v3_dark.mp4`); the
+  photographic basemap is dimmed in dark mode, portraits stay identical.
+- Preview-first process held: stills approved in /tmp/v3prev_* before the
+  full 2700-frame renders; one real bug caught that way (chrome always said
+  "00 · INTRO" because the preview loop never passed the scene index).

@@ -28,6 +28,10 @@ Also in this folder:
   in the project env: `python3 -m venv .venv && .venv/bin/pip install pillow`,
   then `.venv/bin/python demo/make_video.py`. The server and test suites stay
   stdlib-only; Pillow is only for the optional video render.
+- v3 themes: `.venv/bin/python demo/make_video_v2.py --theme light|dark`
+  renders `demo_v3_light.mp4` / `demo_v3_dark.mp4` (section kickers, footer
+  progress, dimmed basemap in dark). `--preview` writes one PNG per scene to
+  `/tmp/v3prev_<theme>` for approval before the full render.
 - `make_video_v2.py` → `demo_v2.mp4` — the full 3-turn story as a 90s
   720p30 video (title, talk, family graph, map, saved facts file, payoff,
   outro). Preview one frame per scene first:
