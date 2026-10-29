@@ -217,3 +217,29 @@ Recorded during setup. Each entry: decision + why.
 - Ava speaks slower than Samantha: the build's overrun gate caught graph
   (+1.2s) and records (+0.1s) overruns, fixed by trimming 6 words total.
   This is the gate working as designed, not a defect.
+
+## 27. Adaptive threads + gentle pause + resume_from (server-only)
+- Why threads: the fixed 3-question cycle dropped names the narrator had
+  just mentioned (Aunt Rosa in turn 1, never revisited). Threads keep every
+  person/place fact open until a later turn re-mentions it, and the
+  follow-up prompt prefers the most salient OPEN thread — the interview
+  feels like listening, not a script. Persisted in `threads.json` per
+  session so replay/resume see the same loose ends.
+- Why substring coverage: deterministic, explainable, no extra LLM call;
+  a re-mention is the observable sign the thread got attention. Empty
+  turns never open/cover (STT failure must not rewrite state).
+- Why 6-turn nudge: long enough for a real story arc, short enough to
+  notice fatigue; tiredness cues ("tired", "enough for today", "let's stop",
+  "another time", case-insensitive) catch explicit asks earlier. It is a
+  suggestion the UI phrases gently — the server never force-stops, so no
+  turn is ever refused.
+- Why resume_from copies: a returning narrator should not re-introduce
+  everyone; copying OPEN threads (+facts for the map) on the first turn
+  lets the opening question re-open the oldest thread. Unknown ids start
+  fresh with no error (typo must not break the loop); same sanitizer as
+  session_id, never applied past the first turn.
+- MOCK mirrors the real rules deterministically (thread-per-person-fact,
+  substring cover, oldest-open-first question) so the offline demo proves
+  adaptivity with no key. Verified: turn 1 opens `th-aunt-rosa` and asks
+  about her; turn 2 re-mentioning her covers the thread and falls back to
+  the cycle; all three existing suites still pass unmodified.

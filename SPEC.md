@@ -5,14 +5,42 @@ A browser-based voice interviewer that helps families capture oral histories.
 An AI asks gentle follow-up questions, records answers, and turns them into a
 citable timeline and family map.
 
-## Voice interview loop
+## Voice interview loop (adaptive)
 1. Browser plays the next interview question via TTS (`speechSynthesis`).
 2. Narrator holds push-to-talk, speaks the answer, releases.
 3. Browser transcribes the turn via Web Speech API (`SpeechRecognition`).
-4. Transcript + conversation history go to the Fireworks LLM, which returns:
-   (a) the next question to ask, (b) structured facts extracted from the turn.
-5. Server saves the audio clip + transcript + facts to local disk.
-6. Repeat. The session ends when the narrator clicks "Finish".
+4. Transcript + conversation history + open loose-end threads go to the
+   Fireworks LLM, which returns: (a) the next question to ask, (b) structured
+   facts extracted from the turn, (c) threads opened / threads covered.
+5. Server saves the audio clip + transcript + facts + threads to local disk.
+6. Repeat. There is no fixed 3-question script: each follow-up prefers the
+   most salient OPEN thread and only asks a fresh question when none fits.
+   The session ends when the narrator clicks "Finish" (or accepts the gentle
+   pause suggestion, which never force-stops).
+
+## Loose-end threads
+- Each turn may yield threads `[{id, text, segment_id, status}]` with
+  `status` open|covered, persisted per session in
+  `recordings/<session_id>/threads.json`.
+- A thread opens per person/place fact whose text is not already threaded;
+  an OPEN thread is covered when a later non-empty transcript re-mentions
+  its text (case-insensitive substring). Empty transcripts never open or
+  cover anything.
+- `POST /api/turn` returns the full current list (open + recently covered,
+  capped at ~20) as `threads`, plus `threads_opened` / `threads_covered`
+  id lists for the turn.
+- `POST /api/turn` accepts optional `resume_from` (a prior session id,
+  sanitized like `session_id`). On the first turn it copies that session's
+  OPEN threads (+facts for the map) into the new session, so the opening
+  question re-opens the oldest open thread. Unknown `resume_from` starts a
+  normal fresh session (no error).
+
+## Gentle pause
+- `POST /api/turn` returns `pause_suggested: bool`, true when the turn
+  count reaches 6 OR the transcript matches a tiredness cue
+  (case-insensitive substrings: "tired", "enough for today", "let's stop",
+  "another time"). The UI phrases it gently; the interview never stops
+  on its own.
 
 ## Push-to-talk turns
 - One turn = one press-and-hold utterance. No continuous listening, no
@@ -30,10 +58,15 @@ citable timeline and family map.
   without a clip citation is invalid and must not render on the timeline/map.
 
 ## Fireworks LLM usage
-- Question generation: prompt with interview goal, asked-so-far list, and the
-  last transcript; returns one short, open-ended next question.
-- Fact extraction: same turn transcript -> strict JSON: array of
-  `{ type, label, detail, date, people, clip_id, start, end }`.
+- Question generation: prompt with interview goal, asked-so-far list, the
+  last transcript, and the open threads; the prompt prefers the most salient
+  OPEN thread and only asks a fresh question when none fits. Returns one
+  short, open-ended next question. (MOCK stub: deterministic cycle, but
+  consumes the oldest open thread first.)
+- Fact extraction: same turn transcript -> strict JSON:
+  `{facts: [{kind, text, when, segment_ids}], threads_opened: [{text,
+  segment_id}], threads_covered: [id-or-text]}` with `threads_opened` only
+  for genuinely new people/places, never for empty turns.
 - No other LLM provider in v1. No fine-tuning; prompt + JSON parsing only.
 
 ## Browser speech (STT/TTS)
