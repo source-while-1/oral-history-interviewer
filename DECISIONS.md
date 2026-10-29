@@ -259,3 +259,23 @@ Recorded during setup. Each entry: decision + why.
   Emil open so session 2 (`demo-resumed`, `resume_from=demo-synthetic`)
   has something to carry over and cover. The console prints
   threads_opened/covered + pause per turn as headless evidence.
+
+## 29. Adaptive suite (test_adaptive.py): exact shapes, isolated sessions
+- Why exact shapes: status-200-only tests would pass while the contract
+  drifts (e.g. `pause_suggested` missing or `threads` items lacking
+  `status`). Every turn asserts the full key set (`question`, `facts`,
+  `threads[{id,text,segment_id,status}]`, `threads_opened`,
+  `threads_covered`, `pause_suggested`, `fallback`) plus values: turn 1
+  opens exactly `["th-aunt-rosa"]` and asks about her; turn 2 covers
+  exactly `["th-aunt-rosa"]` and falls back to `CYCLE[1]`; turn 6 (not
+  5) flips pause; the tired cue (`"I'm tired, let's stop"`, no person
+  names) flips pause with zero thread change; resume's opening question
+  contains the carried name and `facts.json` is byte-equal to the source.
+- Why no edits to smoke/demo/review: all three pass unmodified against
+  the adaptive server (additive keys only), so per the brief no minimal
+  test update was needed — the code already satisfied the pinned
+  contracts. Weakening an assertion to fit was never on the table.
+- Why per-run unique session ids + cleanup: parallel/retried runs must
+  not share `recordings/<sid>` state (stale `threads.json` would fake a
+  cover or a resume). Ids carry timestamp+pid; the `finally` block kills
+  the server and removes every sid dir created.

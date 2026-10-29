@@ -13,7 +13,8 @@ See [SPEC.md](./SPEC.md) and [DECISIONS.md](./DECISIONS.md).
 ## Layout
 
 - `server.py` — stdlib-only backend; `POST /api/turn`, `GET /api/facts`,
-  `GET /api/clip`; `demo/` synthetic backup demo; `test_demo.py` linkage tests
+  `GET /api/threads`, `GET /api/clip`; `demo/` synthetic backup demo;
+  `test_smoke.py` / `test_demo.py` / `test_review.py` / `test_adaptive.py` suites
 - `index.html` — single static frontend (no build step): push-to-talk via
   MediaRecorder, question playback via speechSynthesis, timeline list +
   SVG family map, click-to-replay clip slices
@@ -101,6 +102,48 @@ Details in [demo/README.md](demo/README.md).
   720p30 video, rendered by [`demo/make_video_v2.py`](demo/make_video_v2.py)
   off the vendored [`demo/assets/basemap_ohio.png`](demo/assets/basemap_ohio.png)
   (map: © OpenStreetMap contributors; all pins fictional).
+
+## Adaptive loop (threads, gentle pause, resume)
+
+Each turn returns loose-end `threads` (`[{id, text, segment_id,
+status}]`, open|covered) plus `threads_opened` / `threads_covered` id
+lists and a `pause_suggested` bool. Mentioning a person opens a thread
+(`th-aunt-rosa`); re-mentioning her later covers it. The next question
+prefers the oldest open thread and only asks a fresh question when none
+fits. After 6 turns — or on a tiredness cue ("I'm tired", "enough for
+today", "let's stop", "another time") — the UI shows a gentle pause
+banner with Keep going / Pause & save. Pausing shows a resume code (=
+the `session_id`); typing it into "Resume a session" sends it as
+`resume_from` on the first turn, which copies the old session's open
+threads (+ facts) so the opening question picks the story back up.
+Unknown codes start a clean session.
+
+```sh
+MOCK_LLM=1 PORT=8001 python3 server.py &
+SRV=$!
+sleep 1
+# turn 1: opens th-aunt-rosa, asks about her
+curl -s -X POST localhost:8001/api/turn -H 'Content-Type: application/json' \
+  -d '{"session_id":"s1","audio_b64":"","history":[], "transcript":"I grew up with Aunt Rosa.", "segments":[{"id":"seg-0","text":"I grew up with Aunt Rosa.","start":0,"end":1}]}'
+# turn 2: covers it, falls back to the cycle question
+curl -s -X POST localhost:8001/api/turn -H 'Content-Type: application/json' \
+  -d '{"session_id":"s1","audio_b64":"","history":[{"role":"user","text":"I grew up with Aunt Rosa."}], "transcript":"Aunt Rosa taught me to bake.", "segments":[{"id":"seg-0","text":"Aunt Rosa taught me to bake.","start":0,"end":1}]}'
+# resume in a fresh session: opening question asks about the carried thread
+curl -s -X POST localhost:8001/api/turn -H 'Content-Type: application/json' \
+  -d '{"session_id":"s2","resume_from":"s1","audio_b64":"","history":[], "transcript":"(begin interview)","segments":[]}'
+curl -s 'localhost:8001/api/threads?session_id=s2'
+kill $SRV
+```
+
+```sh
+python3 test_adaptive.py
+```
+
+Covers open-on-turn-1, cover-on-re-mention, pause after 6 turns + on
+tired cue, resume carrying threads/facts with the opening question
+referencing the thread, and clean start on unknown `resume_from`.
+Asserts exact response shapes (`threads`, `threads_opened`,
+`threads_covered`, `pause_suggested`, `fallback`).
 
 ## Demo tests
 
