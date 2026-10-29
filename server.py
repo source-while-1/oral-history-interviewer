@@ -540,6 +540,127 @@ def check_rate_limit(ip, now=None):
     return None
 
 
+# Shared-demo password gate (Task 5): when DEMO_PASSWORD is set (non-empty),
+# EVERY route requires a valid session cookie — pages serve a minimal
+# password page, /api/* gets a 401 JSON. POST /login issues the cookie,
+# POST+GET /logout clears it. The real password value lives in the
+# environment (or .env) and is never logged, never echoed in errors/tests.
+# ---------------------------------------------------------------------------
+
+DEMO_AUTH_COOKIE = "demo_auth"
+DEMO_AUTH_TTL_S = 12 * 3600
+LOGIN_RATE_MAX = 10
+LOGIN_RATE_WINDOW_S = 600
+LOGIN_RATE_MSG = (
+    "Too many login attempts — please wait a little and try again."
+)
+
+# Per-process random signing secret (stable for the server's lifetime) —
+# DEMO_COOKIE_SECRET pins it when set (e.g. multi-process demos).
+_RANDOM_COOKIE_SECRET = secrets.token_bytes(32)
+_login_ip_hits = {}
+
+
+def reset_login_limits():
+    """Clear login-limiter state (tests; the server subprocess starts empty)."""
+    _login_ip_hits.clear()
+
+
+def demo_password():
+    """The gate password, or '' when the gate is off (local dev unchanged)."""
+    return os.environ.get("DEMO_PASSWORD", "")
+
+
+def gate_enabled():
+    """True when DEMO_PASSWORD is set to a non-empty value."""
+    return bool(demo_password())
+
+
+def _cookie_secret():
+    env = os.environ.get("DEMO_COOKIE_SECRET", "")
+    if env:
+        return env.encode()
+    return _RANDOM_COOKIE_SECRET
+
+
+def _sign_expiry(exp):
+    return hmac.new(_cookie_secret(), str(exp).encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def mint_auth_cookie(exp=None):
+    """Mint a signed cookie value valid until exp (default: now + ~12h)."""
+    exp = int(time.time()) + DEMO_AUTH_TTL_S if exp is None else int(exp)
+    return f"{exp}.{_sign_expiry(exp)}"
+
+
+def valid_auth_cookie(value):
+    """Constant-time check of a cookie value; forged/expired -> False."""
+    try:
+        exp_s, sig = str(value or "").split(".", 1)
+        exp = int(exp_s)
+    except (ValueError, AttributeError):
+        return False
+    if exp <= int(time.time()):
+        return False
+    expected = _sign_expiry(exp)
+    try:
+        return hmac.compare_digest(sig, expected)
+    except TypeError:
+        return False
+
+
+def request_auth_cookie(handler):
+    """Extract the demo_auth cookie value from the request, or ''."""
+    raw = handler.headers.get("Cookie") or ""
+    for part in raw.split(";"):
+        name, sep, val = part.partition("=")
+        if sep and name.strip() == DEMO_AUTH_COOKIE:
+            return val.strip()
+    return ""
+
+
+def gate_allows(handler):
+    """True when the gate is off or the request carries a valid cookie."""
+    if not gate_enabled():
+        return True
+    return valid_auth_cookie(request_auth_cookie(handler))
+
+
+def check_login_rate_limit(ip, now=None):
+    """Record one login attempt; return an error message when limited."""
+    now = time.time() if now is None else now
+    hits = _login_ip_hits.setdefault(ip, [])
+    cutoff = now - LOGIN_RATE_WINDOW_S
+    while hits and hits[0] <= cutoff:
+        hits.pop(0)
+    if len(hits) >= LOGIN_RATE_MAX:
+        return LOGIN_RATE_MSG
+    hits.append(now)
+    return None
+
+
+LOGIN_PAGE = (
+    "<!doctype html><html><head><meta charset=utf-8>"
+    "<meta name=viewport content='width=device-width,initial-scale=1'>"
+    "<title>Demo login</title></head><body>"
+    "<h1>Shared demo</h1>"
+    "<p>This demo is password-protected. Enter the password to continue.</p>"
+    "<form id=f><input type=password id=pw autocomplete=current-password>"
+    "<button>Enter</button></form>"
+    "<p id=e></p>"
+    "<script>"
+    "document.getElementById('f').onsubmit=async ev=>{ev.preventDefault();"
+    "const pw=document.getElementById('pw').value;"
+    "const r=await fetch('/login',{method:'POST',"
+    "headers:{'Content-Type':'application/json'},"
+    "body:JSON.stringify({password:pw})});"
+    "if(r.ok){location.reload();}else{"
+    "document.getElementById('e').textContent='Wrong password.';}};"
+    "</script></body></html>"
+)
+
+
 def utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -1977,6 +2098,87 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _gate_denied(self, path):
+        """Gate rejection: password page for pages, 401 JSON for /api/*."""
+        if path.startswith("/api/"):
+            self._send_json({"error": "password required"}, 401)
+        else:
+            data = LOGIN_PAGE.encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    def _cookie_secure(self):
+        """Secure flag everywhere except plain-HTTP localhost."""
+        host = (self.headers.get("Host") or "").split(":")[0].strip(
+            ).lower().strip("[]")
+        return host not in ("localhost", "127.0.0.1", "::1", "")
+
+    def _set_auth_cookie(self, value, max_age=DEMO_AUTH_TTL_S):
+        parts = [f"{DEMO_AUTH_COOKIE}={value}", "HttpOnly", "Path=/",
+                 "SameSite=Lax", f"Max-Age={max_age}"]
+        if self._cookie_secure():
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def _read_login_password(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        try:
+            raw = self.rfile.read(length or 0)
+        except OSError:
+            raw = b""
+        ctype = (self.headers.get("Content-Type") or "")
+        if "application/x-www-form-urlencoded" in ctype:
+            try:
+                form = parse_qs(raw.decode("utf-8", "replace"))
+            except (ValueError, UnicodeDecodeError):
+                return ""
+            v = (form.get("password") or [""])[0]
+            return v if isinstance(v, str) else ""
+        try:
+            payload = json.loads(raw.decode("utf-8") or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return ""
+        if not isinstance(payload, dict):
+            return ""
+        v = payload.get("password", "")
+        return v if isinstance(v, str) else ""
+
+    def _handle_login(self):
+        password = self._read_login_password()
+        err = check_login_rate_limit(client_ip(self))
+        if err:
+            self._send_json({"error": err}, 429)
+            return
+        expected = demo_password()
+        ok = bool(expected) and hmac.compare_digest(password, expected)
+        if not ok:
+            # Generic error: never echoes the password (or anything about it).
+            self._send_json({"error": "invalid password"}, 401)
+            return
+        data = json.dumps({"ok": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Set-Cookie",
+                         self._set_auth_cookie(mint_auth_cookie()))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _handle_logout(self):
+        data = json.dumps({"ok": True}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Set-Cookie", self._set_auth_cookie("expired", 0))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _demo_blocked_read(self, session_id):
         """In DEMO_MODE only fictional demo sessions with data are served."""
         if not demo_mode_enabled():
@@ -1992,6 +2194,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if gate_enabled() and parsed.path in ("/login", "/logout"):
+            if parsed.path == "/logout":
+                self._handle_logout()
+                return
+            data = LOGIN_PAGE.encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if not gate_allows(self):
+            self._gate_denied(parsed.path)
+            return
         if parsed.path == "/":
             self._serve_file(ROOT / "index.html", "text/html; charset=utf-8")
         elif parsed.path == "/api/demo-info":
@@ -2110,6 +2326,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if gate_enabled() and parsed.path in ("/login", "/logout"):
+            if parsed.path == "/login":
+                self._handle_login()
+            else:
+                self._handle_logout()
+            return
+        if not gate_allows(self):
+            self._send_json({"error": "password required"}, 401)
+            return
         if parsed.path == "/api/consent":
             length = int(self.headers.get("Content-Length", 0))
             try:
