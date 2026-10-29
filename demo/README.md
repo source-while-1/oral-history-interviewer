@@ -23,9 +23,10 @@ python3 demo/replay.py
 The script is a 4-turn arc (still all-fictional): turn 1 introduces Aunt
 Rosa (opens thread `th-aunt-rosa`, next question asks about her), turn 2
 introduces Grandpa Emil (opens `th-grandpa-emil`), turn 3 re-mentions Aunt
-Rosa (covers `th-aunt-rosa`), and turn 4 says "I'm getting tired, let's
-stop for today" (no names; `pause_suggested` turns true via the tired cue
-while Grandpa Emil stays open). The console prints
+Rosa (covers `th-aunt-rosa`), and turn 4 is a short wrap-up ("Not much
+more to say today.", no names; `pause_suggested` turns true via the
+MOCK shortening proxy — 6 words vs a ~17-word baseline — while Grandpa
+Emil stays open). The console prints
 `threads_opened`/`threads_covered`/`pause_suggested` per turn so the
 open→covered arc and the pause nudge are visible without a browser.
 

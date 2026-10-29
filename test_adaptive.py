@@ -142,13 +142,23 @@ def main():
         assert last["pause_suggested"] is True, last
         print("C1 OK: pause_suggested false turns 1-5, true on turn 6")
 
-        # C2: tiredness cue forces pause early.
+        # C2: first-person tiredness after a full baseline pauses early.
+        # (No keyword matching: pause comes from the MOCK shortening proxy —
+        #  the short tired turn against three long baseline turns.)
         sidt = f"adapt-tired-{stamp}"
         sids.append(sidt)
-        dt = turn(sidt, "I'm tired, let's stop", [])
+        histt = []
+        for i in range(3):
+            bt = ("The harvest that year was long and hot and we worked "
+                  f"every day until sundown, week {i}.")
+            dtb = turn(sidt, bt, histt)
+            assert dtb["pause_suggested"] is False, (i, dtb)
+            histt.append({"role": "user", "text": bt})
+        dt = turn(sidt, "I'm tired, let's stop", histt)
         assert dt["pause_suggested"] is True, dt
         assert dt["threads_opened"] == [] and dt["threads_covered"] == [], dt
-        print("C2 OK: tired cue -> pause_suggested true, no thread change")
+        print("C2 OK: tired turn after baseline -> pause_suggested true, "
+              "no thread change")
 
         # D: resume_from carries open threads + facts; opening Q re-opens.
         src = f"adapt-src-{stamp}"

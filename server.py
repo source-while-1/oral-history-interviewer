@@ -12,7 +12,10 @@ Storage: recordings/<session>/<clip>.wav + transcript.jsonl (gitignored).
 LLM: Fireworks via OpenAI-compatible chat-completions endpoint. Two
 concurrent calls per turn: (1) warm single-question follow-up (short
 max_tokens), (2) JSON-mode fact extraction
-{kind: person|place|event|relationship, text, when, segment_ids}.
+{kind: person|place|event|relationship, text, when, segment_ids} plus a
+fatigue judgment {tired, reason} riding the same call (no added latency).
+Pause is model-judged on the real path, a length-only shortening proxy on
+the MOCK path, with the turn-count>=6 fallback on both; never keywords.
 segment_ids are mapped server-side to (clip_id, start, end) so every
 persisted fact cites a clip slice. MOCK_LLM=1 (default) forces stub.
 
@@ -50,11 +53,16 @@ FIREWORKS_STT_MODEL = os.environ.get("FIREWORKS_STT_MODEL", "whisper-v3-turbo")
 
 FACT_KINDS = ("person", "place", "event", "relationship")
 
-# Gentle-pause cues (case-insensitive substrings of the turn transcript).
+# Gentle-pause judgment is model/behavioral (never keyword matching).
 # A suggestion only — the server never force-stops the interview.
-TIRED_CUES = ("tired", "enough for today", "let's stop", "let\u2019s stop",
-              "another time")
 PAUSE_TURN_THRESHOLD = 6
+# MOCK/offline fatigue proxy (documented stub approximation): relative
+# answer shortening against the session's own baseline. Fires only with
+# >=3 prior non-empty turns, a baseline mean clearing a word floor, and a
+# non-empty current turn under RATIO of that mean. Length only, no cues.
+MOCK_FATIGUE_MIN_PRIOR_TURNS = 3
+MOCK_FATIGUE_RATIO = 0.4
+MOCK_FATIGUE_MIN_BASELINE_WORDS = 8
 MAX_THREADS_RETURNED = 20
 
 
@@ -87,17 +95,85 @@ def load_threads(session_dir):
     return threads
 
 
+def load_prior_word_counts(session_dir):
+    """Word counts of prior turns' transcripts (oldest first).
+
+    Read from transcript.jsonl; corrupt/missing recovers to []. Used only
+    by the MOCK fatigue proxy so shortening is judged against the
+    session's own baseline.
+    """
+    path = Path(session_dir) / "transcript.jsonl"
+    try:
+        lines = path.read_text().splitlines() if path.exists() else []
+    except OSError:
+        return []
+    counts = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            counts.append(word_count(row.get("transcript") or ""))
+    return counts
+
+
 def save_threads(session_dir, threads):
     Path(session_dir).mkdir(parents=True, exist_ok=True)
     Path(session_dir, "threads.json").write_text(json.dumps(threads or [], indent=2))
 
 
-def pause_suggested(turn_count, transcript_text):
-    """True when turn_count>=threshold or the transcript carries a tired cue."""
-    t = (transcript_text or "").lower()
+def word_count(text):
+    """Whitespace word count (0 for empty/None)."""
+    return len((text or "").split())
+
+
+def mock_fatigue_shortened(transcript_text, prior_word_counts):
+    """Stub fatigue proxy: True when the current answer is markedly shorter
+    than the session's own baseline. Length only — no keyword/regex lists.
+
+    Requires >=MOCK_FATIGUE_MIN_PRIOR_TURNS prior non-empty turns, a
+    baseline mean of >=MOCK_FATIGUE_MIN_BASELINE_WORDS words (terse
+    sessions never fire), and a non-empty current turn under
+    MOCK_FATIGUE_RATIO of that mean (empty/STT-failure turns never fire).
+    """
+    cur = word_count(transcript_text)
+    if not (transcript_text or "").strip():
+        return False
+    priors = [w for w in (prior_word_counts or []) if w > 0]
+    if len(priors) < MOCK_FATIGUE_MIN_PRIOR_TURNS:
+        return False
+    mean = sum(priors) / len(priors)
+    if mean < MOCK_FATIGUE_MIN_BASELINE_WORDS:
+        return False
+    return cur < MOCK_FATIGUE_RATIO * mean
+
+
+def parse_fatigue(parsed):
+    """Validate the model's fatigue judgment from parsed extraction JSON.
+
+    Returns {"tired": bool, "reason": str}; anything missing or malformed
+    (non-dict, non-bool tired) recovers to not-tired.
+    """
+    tired, reason = False, ""
+    if isinstance(parsed, dict):
+        fat = parsed.get("fatigue")
+        if isinstance(fat, dict):
+            if fat.get("tired") is True:
+                tired = True
+            reason = str(fat.get("reason", "") or "")
+    return {"tired": tired, "reason": reason}
+
+
+def pause_suggested(turn_count, transcript_text, prior_word_counts=None,
+                    llm_tired=False):
+    """True on the turn-count fallback, the real-path model judgment, or
+    the MOCK shortening proxy. Never keyword matching."""
     if turn_count >= PAUSE_TURN_THRESHOLD:
         return True
-    return any(cue in t for cue in TIRED_CUES)
+    if llm_tired:
+        return True
+    return mock_fatigue_shortened(transcript_text, prior_word_counts)
 
 
 def sanitize_id(raw, default="default"):
@@ -315,11 +391,30 @@ def gen_followup(history, transcript_text, open_threads=None):
     return _post_chat(messages, max_tokens=FOLLOWUP_MAX_TOKENS, temperature=0.6).strip()
 
 
-def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
-    """Call 2: JSON-mode fact+thread extraction with segment_ids citing segments.
+FATIGUE_INSTRUCTIONS = (
+    ' Also judge THIS turn\'s interviewee fatigue: "fatigue": '
+    '{"tired": bool, "reason": str}. tired=true ONLY when the speaker '
+    "themself signals tiredness, disengagement, or wanting to slow down "
+    "or stop in THIS turn: first-person or implicit cues "
+    '("I\'m tired", "let\'s stop", "not much more to say", '
+    '"let\'s wrap this up"), markedly terse or disengaged replies, or '
+    "explicit wrap-up requests. tired=false for third-person or "
+    "historical mentions "
+    '("my father was tired after the war", "the work was exhausting '
+    'back then") and for vivid detailed storytelling even if it contains '
+    'the word "tired". When unsure, false; reason is a short quote or '
+    "paraphrase."
+)
 
-    Returns (facts, threads_opened, threads_covered_ids). threads_opened items
-    are {text, segment_id}; threads_covered_ids are thread-id or text strings.
+
+def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
+    """Call 2: JSON-mode fact+thread+fatigue extraction with segment_ids.
+
+    Returns (facts, threads_opened, threads_covered_ids, fatigue).
+    threads_opened items are {text, segment_id}; threads_covered_ids are
+    thread-id or text strings; fatigue is {"tired": bool, "reason": str}
+    (model judgment of the speaker's own state this turn, validated by
+    parse_fatigue). No extra LLM call: fatigue rides the existing call.
     """
     open_hint = ""
     if open_threads:
@@ -340,10 +435,12 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
                 '"person|place|event|relationship", "text": str, "when": str, '
                 '"segment_ids": [str]}], '
                 '"threads_opened": [{"text": str, "segment_id": str}], '
-                '"threads_covered": [str]}. '
+                '"threads_covered": [str], '
+                '"fatigue": {"tired": bool, "reason": str}}. '
                 f"kind must be one of person/place/event/relationship. "
                 f"segment_ids must cite these ids (or [] if none apply): {valid_ids}."
                 + open_hint
+                + FATIGUE_INSTRUCTIONS
             ),
         },
         {"role": "user", "content": transcript_text[-4000:] or "(no transcript)"},
@@ -357,9 +454,9 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
     try:
         parsed = json.loads(content)
     except ValueError:
-        return [], [], []
+        return [], [], [], {"tired": False, "reason": ""}
     if isinstance(parsed, list):
-        return (parsed, [], [])
+        return (parsed, [], [], {"tired": False, "reason": ""})
     facts = parsed.get("facts", [])
     if not isinstance(facts, list):
         facts = []
@@ -369,11 +466,15 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
     covered = parsed.get("threads_covered", [])
     if not isinstance(covered, list):
         covered = []
-    return facts, opened, covered
+    return facts, opened, covered, parse_fatigue(parsed)
 
 
 def run_llm_turn(history, transcript_text, segments, open_threads=None):
-    """Run follow-up + fact/thread extraction; return (question, raw, opened, covered)."""
+    """Run follow-up + fact/thread/fatigue extraction.
+
+    Still two concurrent calls (fatigue rides call 2, no added latency);
+    returns (question, raw, opened, covered, fatigue).
+    """
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         q_future = pool.submit(gen_followup, history, transcript_text, open_threads)
         f_future = pool.submit(
@@ -381,8 +482,8 @@ def run_llm_turn(history, transcript_text, segments, open_threads=None):
             [s["id"] for s in segments], open_threads,
         )
         question = q_future.result()
-        raw_facts, opened, covered = f_future.result()
-        return question, raw_facts, opened, covered
+        raw_facts, opened, covered, fatigue = f_future.result()
+        return question, raw_facts, opened, covered, fatigue
 
 
 def apply_thread_updates(threads, transcript_text, facts, llm_opened=None,
@@ -694,6 +795,7 @@ class Handler(BaseHTTPRequestHandler):
         fallback_note = ""
         fallback = False
         llm_opened, llm_covered = [], []
+        llm_tired = False
         try:
             if use_mock:
                 question, facts = mock_llm_turn(history, transcript_text, segments,
@@ -713,9 +815,11 @@ class Handler(BaseHTTPRequestHandler):
                     seg_by_id,
                 )
             else:
-                question, raw_facts, llm_opened, llm_covered = run_llm_turn(
+                (question, raw_facts, llm_opened, llm_covered,
+                 fatigue) = run_llm_turn(
                     history, transcript_text, segments, open_for_prompt)
                 facts = resolve_fact_links(raw_facts, clip_id, seg_by_id)
+                llm_tired = bool((fatigue or {}).get("tired"))
         except Exception as e:  # fall back to stub so the loop stays runnable
             question, facts = mock_llm_turn(history, transcript_text, segments,
                                             open_for_prompt)
@@ -767,7 +871,12 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             prior_turns = 0
         turn_count = prior_turns + 1
-        suggested = pause_suggested(turn_count, transcript_text)
+        # MOCK proxy baseline: word counts of this session's prior turns.
+        # Real path: the model's own fatigue judgment from call 2.
+        prior_word_counts = load_prior_word_counts(session_dir)
+        suggested = pause_suggested(
+            turn_count, transcript_text, prior_word_counts,
+            llm_tired=llm_tired)
 
         result = {
             "question": question or mock_llm_turn(

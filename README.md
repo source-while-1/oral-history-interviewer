@@ -121,8 +121,10 @@ status}]`, open|covered) plus `threads_opened` / `threads_covered` id
 lists and a `pause_suggested` bool. Mentioning a person opens a thread
 (`th-aunt-rosa`); re-mentioning her later covers it. The next question
 prefers the oldest open thread and only asks a fresh question when none
-fits. After 6 turns — or on a tiredness cue ("I'm tired", "enough for
-today", "let's stop", "another time") — the UI shows a gentle pause
+fits. After 6 turns — or when the interviewee seems tired (real path:
+the LLM judges first-person/implicit fatigue inside the extraction call;
+offline/MOCK path: a markedly shortened answer vs the session's own
+baseline, no keywords) — the UI shows a gentle pause
 banner with Keep going / Pause & save. Pausing shows a resume code (=
 the `session_id`); typing it into "Resume a session" sends it as
 `resume_from` on the first turn, which copies the old session's open
@@ -151,10 +153,13 @@ python3 test_adaptive.py
 ```
 
 Covers open-on-turn-1, cover-on-re-mention, pause after 6 turns + on
-tired cue, resume carrying threads/facts with the opening question
-referencing the thread, and clean start on unknown `resume_from`.
-Asserts exact response shapes (`threads`, `threads_opened`,
-`threads_covered`, `pause_suggested`, `fallback`).
+a short tired turn after a baseline, resume carrying threads/facts with
+the opening question referencing the thread, and clean start on unknown
+`resume_from`. Asserts exact response shapes (`threads`,
+`threads_opened`, `threads_covered`, `pause_suggested`, `fallback`).
+`python3 test_fatigue.py` covers model-judged fatigue: implicit wrap-up
+cues trigger, third-person/historical "tired" mentions do not, the 6-turn
+fallback still fires, empty never fires.
 
 ## Demo tests
 

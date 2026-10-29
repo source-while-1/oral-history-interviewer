@@ -309,3 +309,46 @@ Recorded during setup. Each entry: decision + why.
 - Outputs: `demo/demo_v6_light.mp4` + `demo/demo_v6_dark.mp4` (90.0s,
   720p30, h264 + full-length Ava AAC, ffprobe-verified); v5 files
   untouched, new `--out`/`--preview` defaults.
+
+## 31. Model-judged fatigue replaces the tiredness-cue substring list
+- Why model-judged: the `TIRED_CUES` substring list misfired on
+  third-person mentions ("my father was tired after the war" ->
+  `pause_suggested=True`, observed live) and missed real wrap-ups
+  ("let's wrap this up", "not much more to say" -> False). Tone,
+  shortening, and disengagement are judgments, not string matches.
+- Real path (`MOCK_LLM=0`): the existing JSON fact-extraction prompt
+  gains a `fatigue: {tired: bool, reason: str}` field
+  (`FATIGUE_INSTRUCTIONS` in server.py) — no third LLM call, so the
+  per-turn call structure is unchanged (still 2 concurrent calls in the
+  existing `ThreadPoolExecutor`). The prompt bids tired=true only for
+  the speaker's own state this turn (first-person or implicit cues,
+  terse/disengaged replies) and false for third-person/historical
+  mentions and vivid storytelling containing "tired"; unsure defaults
+  to false. `parse_fatigue` validates (non-bool/missing -> not-tired).
+- Why the MOCK proxy differs: offline there is no model, so the stub
+  uses a length-only behavioral proxy (`mock_fatigue_shortened`): a
+  non-empty turn under 40% of the session's own baseline mean, needing
+  >= 3 prior turns and a baseline mean >= 8 words; empty/STT-failure
+  and terse sessions never fire. Documented as a stub approximation in
+  code + SPEC. It cannot see explicit wording, so the demo's turn 4 is
+  now a behaviorally-short wrap-up ("Not much more to say today.",
+  6 words vs a ~17-word baseline) instead of a long "I'm tired" speech
+  that would not pause — noted inline in `demo/script.json`. Stats
+  unchanged (still 4 turns / 8 segments, no names on turn 4).
+- Latency: MOCK mean turn 3ms local (4-turn demo replay, measured).
+  Live-path delta vs the 2-call baseline is ~0 by construction (same
+  calls, a few extra JSON output tokens) — an estimate: no
+  `FIREWORKS_API_KEY` here, so no live timing was possible.
+- Tests: new `test_fatigue.py` (one place) — wrap-up phrasing, "not
+  much more to say", and steep shortening trigger; "my father was
+  tired after the war", "harvest work was exhausting back then", and a
+  long vivid story containing "tired" do not; 6-turn fallback fires;
+  empty never fires; every case asserts `pause_suggested` + flowing
+  threads/facts. `test_adaptive.py` C2 adapted minimally (contract
+  forced it: a single-turn cue cannot pause without keywords, so C2
+  now runs three ~17-word baselines then "I'm tired, let's stop" and
+  keeps its assertions); C1/D/E untouched. All 5 suites green.
+- v6 video left untouched: the pause scene ("When you are tired, just
+  say so", Keep going / Pause & save) depicts the real-path behavior —
+  explicit first-person tiredness still pauses there — and the generic
+  pause UX, not the MOCK stub; no frame is inaccurate, so no re-render.

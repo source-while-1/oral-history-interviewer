@@ -41,10 +41,17 @@ citable timeline and family map.
 
 ## Gentle pause
 - `POST /api/turn` returns `pause_suggested: bool`, true when the turn
-  count reaches 6 OR the transcript matches a tiredness cue
-  (case-insensitive substrings: "tired", "enough for today", "let's stop",
-  "another time"). The UI phrases it gently; the interview never stops
-  on its own.
+  count reaches 6 OR the interviewee is judged tired — never by keyword
+  matching. Real path (`MOCK_LLM=0`): the fact-extraction LLM call also
+  returns `fatigue: {tired, reason}`, judging first-person and implicit
+  cues ("I'm tired", "let's stop", "not much more to say", "let's wrap
+  this up", markedly terse/disengaged replies) while ignoring
+  third-person or historical mentions ("my father was tired after the
+  war", "the work was exhausting back then"). MOCK path (offline demo /
+  tests): a length-only behavioral proxy — a non-empty turn under 40%
+  of the session's own baseline mean (needs >= 3 prior turns, baseline
+  mean >= 8 words), documented as a stub approximation. The UI phrases
+  it gently; the interview never stops on its own.
 - When true, the UI shows a banner ("We've covered a lot — want to pause
   and pick this up another time?") with [Keep going] (dismisses) and
   [Pause & save] (ends the session and shows a resume code = the
@@ -75,8 +82,10 @@ citable timeline and family map.
   consumes the oldest open thread first.)
 - Fact extraction: same turn transcript -> strict JSON:
   `{facts: [{kind, text, when, segment_ids}], threads_opened: [{text,
-  segment_id}], threads_covered: [id-or-text]}` with `threads_opened` only
-  for genuinely new people/places, never for empty turns.
+  segment_id}], threads_covered: [id-or-text], fatigue: {tired, reason}}`
+  with `threads_opened` only for genuinely new people/places, never for
+  empty turns. `fatigue` rides this same call (no extra latency) and
+  drives `pause_suggested` on the real path.
 - No other LLM provider in v1. No fine-tuning; prompt + JSON parsing only.
 
 ## Browser speech (STT/TTS)

@@ -24,10 +24,11 @@
       ]
     },
     {
-      "transcript": "I'm getting tired, let's stop for today and pick this up another time.",
+      "_note": "Short wrap-up turn on purpose: the MOCK/offline path judges fatigue behaviorally (answer shortening vs the session baseline, no keywords), so a long explicit 'I'm tired' speech would NOT pause there. The real LLM path still judges explicit first-person tiredness directly.",
+      "transcript": "Not much more to say today.",
       "segments": [
-        {"id": "seg-0", "text": "I'm getting tired, let's stop for today.", "start": 0.0, "end": 3.0},
-        {"id": "seg-1", "text": "and pick this up another time.", "start": 3.0, "end": 5.5}
+        {"id": "seg-0", "text": "Not much more to say", "start": 0.0, "end": 2.0},
+        {"id": "seg-1", "text": "today.", "start": 2.0, "end": 3.0}
       ]
     }
   ],
