@@ -279,3 +279,33 @@ Recorded during setup. Each entry: decision + why.
   not share `recordings/<sid>` state (stale `threads.json` would fake a
   cover or a resume). Ids carry timestamp+pid; the `finally` block kills
   the server and removes every sid dir created.
+
+## 30. v6 video: the adaptive story (threads → keep going → pause → resume)
+- Why the scene list changed: v5 showed the old 3-turn loop (talk /
+  graph / save), but the product is now the adaptive loop — threads,
+  no forced stop, gentle pause, resume. v6 retells it in 8 scenes/90s
+  (title 8, threads 14, keep-going 12, pause 12, resume 12, map 12,
+  payoff 10, outro 10): the Open-threads panel opening Aunt Rosa then
+  covering her on re-mention, the turn counter passing the old 3-round
+  limit while Grandpa Emil stays open, the tiredness cue with Keep
+  going / Pause & save, the resume code carried by `resume_from` with
+  open threads + map facts, and a payoff counting the real arc.
+- Why graph/records scenes went: with 90s fixed, they duplicated what
+  the threads panel (facts become threads) and payoff/resume frames
+  (saved-facts-file wording, clip citations) already show. Map stays:
+  the fiction banner + OSM credit live on the map frames.
+- Why stats are computed, not typed: a new `demo_stats()` replays
+  `demo/script.json` with the server stub's Title-Name rule (first
+  mention opens, re-mention covers, one event fact per non-empty turn),
+  yielding 4 turns / 8 segments / 7 facts / 2 opened · 1 covered · 1
+  still open — the same numbers the MOCK server path produces, so the
+  video cannot drift from the demo. Narration rewritten for the story
+  (183 words); the 180–220 overrun gate is unchanged and still passed
+  clean — tightest fit is map (10.80s in 12s). Preview-first held on
+  both themes (`/tmp/v6prev_*`, all 16 stills viewed): two real bugs
+  caught — a thread row running under its status pill (fixed with
+  two-line id-over-name rows) and payoff numerals touching their
+  labels (top-anchored 110px glyphs need the numerals sat higher).
+- Outputs: `demo/demo_v6_light.mp4` + `demo/demo_v6_dark.mp4` (90.0s,
+  720p30, h264 + full-length Ava AAC, ffprobe-verified); v5 files
+  untouched, new `--out`/`--preview` defaults.

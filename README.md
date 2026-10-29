@@ -95,6 +95,17 @@ Details in [demo/README.md](demo/README.md).
   [`demo/demo_v5_dark.mp4`](demo/demo_v5_dark.mp4) — Plex Serif display
   type with letterspaced kickers, edge-tts Ava neural voiceover.
   Needs `edge-tts` in the project env.
+- v6: [`demo/demo_v6_light.mp4`](demo/demo_v6_light.mp4) and
+  [`demo/demo_v6_dark.mp4`](demo/demo_v6_dark.mp4) — the adaptive
+  story (~90s): Open-threads panel as Aunt Rosa opens then gets
+  covered, the turn counter passing the old 3-round limit, a gentle
+  pause on the "I'm tired…" cue with Keep going / Pause & save, the
+  resume code carried via `resume_from` into a new session whose
+  opening question re-opens Grandpa Emil, payoff + outro. Same
+  pipeline (Plex Serif/Sans, section chrome, 183-word Ava narration
+  under the unchanged 180–220 overrun gate). Rendered by
+  [`demo/make_video_v2.py`](demo/make_video_v2.py)
+  (`.venv/bin/python demo/make_video_v2.py --theme light|dark`).
 - v3 restyle: [`demo/demo_v3_light.mp4`](demo/demo_v3_light.mp4) and
   [`demo/demo_v3_dark.mp4`](demo/demo_v3_dark.mp4) — the 90s v2 story with
   section chrome (kickers, footer progress), light + dark themes (silent).

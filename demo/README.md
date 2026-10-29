@@ -60,6 +60,22 @@ Also in this folder:
   `en-US-AvaNeural` (no key needed, network at render time).
   `.venv/bin/pip install edge-tts`, then render `--out demo/demo_v5_light.mp4`.
   Serif cuts live in `assets/fonts/` next to the Sans variable font.
+- v6: the adaptive story as `demo_v6_light.mp4` / `demo_v6_dark.mp4`
+  (8 scenes, 90s, 720p30, h264 + AAC; v5 files untouched). Scene list:
+  title; threads (Open-threads panel: Aunt Rosa opens turn 1, Grandpa
+  Emil opens turn 2, Rosa covered on the turn-3 re-mention); keep-going
+  (turn counter passes the old 3-round limit to 6 while threads stay
+  open); pause (tiredness cue "I'm tired, let's pick this up another
+  time" + Keep going / Pause & save); resume (code `demo-synthetic` →
+  `resume_from` carries 1 open thread + 7 saved facts into
+  `demo-resumed`, opening question re-opens Grandpa Emil); map
+  (fiction banner + OSM credit kept); payoff (4 turns / 8 segments /
+  7 facts / 2 opened · 1 covered · 1 carried); outro. Counts come from
+  `demo_stats()` in the renderer, which replays
+  [`script.json`](script.json) with the server stub's Title-Name rule,
+  so the video cannot drift from the demo it depicts. Narration is a
+  new 183-word Ava script for this story (existing 180–220 overrun
+  gate unchanged). `--preview` writes to `/tmp/v6prev_<theme>`.
 - v4 (designed + voiced): same script renders `demo_v4_light.mp4` /
   `demo_v4_dark.mp4` (90s, 720p30, h264 + AAC). New in v4: vendored
   IBM Plex Sans (`assets/fonts/IBMPlexSans-Variable.ttf`, Regular body /

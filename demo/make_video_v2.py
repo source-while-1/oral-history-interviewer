@@ -1,10 +1,13 @@
-"""Render demo_v5 light/dark explainers: Plex Serif display type, sticker
-portraits, layout chips, and an edge-tts neural voiceover.
+"""Render demo_v6 light/dark explainers: the adaptive interview story
+(threads open/cover, the turn counter passes 3, a gentle pause, resume
+by code) with Plex Serif display type, sticker portraits, layout chips,
+and an edge-tts neural voiceover.
 
 Pure Pillow frames (1280x720@30fps) piped to ffmpeg/libx264. All people,
 places, and events are fictional (Aunt Rosa, Grandpa Emil, Ohio farm).
-Script lines, turn counts, and segment counts are read from
-demo/script.json so on-screen stats always match the real demo script.
+Script lines, turn counts, segment counts, and the thread open/cover
+arc are derived from demo/script.json (same Title-Name rule as the
+server stub) so on-screen stats always match the real demo script.
 An edge-tts neural voiceover (one block per scene, padded/trimmed to
 the scene length) is muxed as AAC so narration never overruns its scene.
 
@@ -15,7 +18,7 @@ fails fast with a clear error when it is missing.
 The on-screen store is always called the "saved facts file" (facts.jsonl).
 
 Usage:
-  .venv/bin/python demo/make_video_v2.py [--out demo/demo_v5_light.mp4]
+  .venv/bin/python demo/make_video_v2.py [--out demo/demo_v6_light.mp4]
   .venv/bin/python demo/make_video_v2.py --preview   # one PNG per scene
   .venv/bin/python demo/make_video_v2.py --theme dark --no-audio
 """
@@ -23,6 +26,7 @@ Usage:
 import argparse
 import json
 import math
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -58,9 +62,10 @@ THEMES = {
     },
 }
 
-SCENE_KICKER = {"title": "00 · INTRO", "talk": "01 · TALK", "graph": "02 · THINK",
-                "map": "03 · MAP", "records": "04 · SAVE", "payoff": "05 · PAYOFF",
-                "outro": "06 · OUTRO"}
+SCENE_KICKER = {"title": "00 · INTRO", "threads": "01 · THREADS",
+                "continue": "02 · KEEP GOING", "pause": "03 · PAUSE",
+                "resume": "04 · RESUME", "map": "05 · MAP",
+                "payoff": "06 · PAYOFF", "outro": "07 · OUTRO"}
 
 
 def set_theme(name):
@@ -102,7 +107,7 @@ def chrome(d, f, idx, overall, kicker=None):
     # version label floats on its own chip 14px above the bar so the two
     # never touch (v3 drew the text directly onto the bar row).
     chip(d, (1200, H - 44),
-         "demo v5 · %s · scene %d/%d" % (THEME_NAME, idx + 1, len(SCENES)),
+         "demo v6 · %s · scene %d/%d" % (THEME_NAME, idx + 1, len(SCENES)),
          f["tiny"], fill=CARD, outline=LINE, anchor="ra",
          text_fill=MUTED)
 
@@ -139,6 +144,45 @@ KINDS = ["person", "place", "event", "person", "place", "event"]
 ROWS = [{"kind": KINDS[i % 3], "text": s["text"], "clip": "clip-%d" % ti,
          "start": s["start"], "end": s["end"], "seg": s["id"]}
         for i, (ti, s) in enumerate(SEGS)]
+
+# The adaptive arc, derived from demo/script.json with the same Title-Name
+# rule as the server stub (mock_llm_turn): first mention opens a thread,
+# a later re-mention covers it, and each non-empty turn also yields one
+# event fact. For the shipped script: Aunt Rosa opens turn 1, Grandpa
+# Emil opens turn 2, Rosa is covered in turn 3, and Emil stays open
+# through the tired-cue turn 4 so the resumed session can carry him.
+NAME_RE = re.compile(
+    r"\b(Aunt|Uncle|Grandma|Grandpa|Mother|Father|Granny|Cousin)"
+    r"\s+([A-Z][a-z]+)")
+
+
+def demo_stats():
+    opened, covered, order, facts = {}, {}, [], 0
+    for ti, t in enumerate(TURNS):
+        if (t.get("transcript") or "").strip():
+            facts += 1  # one event fact per non-empty turn
+        seen = set()
+        for s in t.get("segments", []):
+            for m in NAME_RE.finditer(s.get("text", "")):
+                name = m.group(1) + " " + m.group(2)
+                if name in seen:
+                    continue
+                seen.add(name)
+                facts += 1
+                if name not in opened:
+                    opened[name] = ti
+                    order.append(name)
+                elif name not in covered:
+                    covered[name] = ti
+    still_open = [n for n in order if n not in covered]
+    return {"facts": facts, "opened": order, "covered": covered,
+            "still_open": still_open}
+
+
+STATS = demo_stats()
+N_FACTS = STATS["facts"]
+N_OPEN = len(STATS["opened"])
+N_STILL_OPEN = len(STATS["still_open"])
 
 # Vendored basemap geometry: 3x2 tiles of z11, x in 551..553, y in 774..775.
 _Z, _X0, _Y0, _NX, _NY = 11, 551, 774, 3, 2
@@ -387,83 +431,100 @@ def frame_title(img, d, f, p):
              f["small"], fill=MUTED, anchor="ma")
 
 
-SPEAKERS = [("rosa", "Aunt Rosa"), ("emil", "Grandpa Emil"), ("rosa", "Aunt Rosa")]
+def _thread_row(d, f, y, name, state):
+    """One Open-threads panel row: id over name, open/covered pill right."""
+    tid = "th-" + name.lower().replace(" ", "-")
+    d.rounded_rectangle([760, y, 1200, y + 76], radius=8, fill=PANEL,
+                        outline=LINE, width=2)
+    text(d, (782, y + 12), tid, f["tiny"], fill=MUTED, anchor="la")
+    text(d, (782, y + 32), name, f["small"], anchor="la")
+    pill, ink = ((ACCENT, "white") if state == "open"
+                 else (LINE, MUTED) if state == "covered" else (BG, MUTED))
+    plabel = state if state in ("open", "covered") else "…"
+    tw = d.textlength(plabel, font=f["tiny"]) + 24
+    d.rounded_rectangle([1180 - tw, y + 24, 1180, y + 52], radius=12,
+                        fill=pill)
+    d.text((1180 - tw / 2, y + 38), plabel, font=f["tiny"], fill=ink,
+           anchor="mm")
 
 
-def frame_talk(img, d, f, p):
-    text(d, (80, 56), "Talk — three turns, one interview", f["h"])
-    q = min(2.999, p * 3)
-    ti = int(q)
-    tp = q - ti
-    turn = TURNS[ti]
-    who, name = SPEAKERS[ti]
-    text(d, (80, 130), "Turn %d of %d · %s" % (ti + 1, N_TURNS, name), f["body"])
-    portrait_kid(img, d, 200, 330)
-    if who == "rosa":
-        portrait_rosa(img, d, 470, 330)
+def frame_threads(img, d, f, p):
+    text(d, (80, 56), "Talk — threads open as you speak", f["h"])
+    # left: three turns arrive in order; right: the Open-threads panel.
+    if p > 0.05:
+        text(d, (80, 122), "Turn 1 · you mention Aunt Rosa", f["body"])
+    if p > 0.12:
+        bubble(d, 80, 160, 620,
+               wrap(d, "I grew up on a farm in Ohio with Aunt Rosa.",
+                    f["small"], 580) or ["…"], f["small"])
+    if p > 0.42:
+        text(d, (80, 300), "Turn 2 · Grandpa Emil joins in", f["body"])
+    if p > 0.48:
+        bubble(d, 80, 338, 620,
+               wrap(d, "Grandpa Emil built that barn in 1958.",
+                    f["small"], 580) or ["…"], f["small"])
+    if p > 0.70:
+        text(d, (80, 478), "Turn 3 · you mention Aunt Rosa again", f["body"])
+    if p > 0.76:
+        bubble(d, 80, 516, 620,
+               wrap(d, "The pie prize Aunt Rosa won — we still talk about it.",
+                    f["small"], 580) or ["…"], f["small"])
+    d.rounded_rectangle([740, 122, 1200, 620], radius=12, fill=CARD,
+                        outline=LINE, width=2)
+    text(d, (970, 160), "Open threads", f["body"], anchor="ma")
+    # Aunt Rosa: opens with turn 1, covered when turn 3 re-mentions her.
+    if p > 0.28:
+        _thread_row(d, f, 196, "Aunt Rosa",
+                    "covered" if p > 0.82 else "open")
     else:
-        portrait_emil(img, d, 470, 330)
-    lines = []
-    for j, s in enumerate(turn["segments"]):
-        if tp > 0.15 + j * 0.3:
-            lines += wrap(d, s["text"], f["small"], 560)
-            if j < len(turn["segments"]) - 1:
-                lines.append("")
-    lines = lines or ["…"]
-    bubble(d, 600, 210, 600, lines[:6], f["small"])
-    if tp > 0.7:
-        s0 = turn["segments"][0]
-        # chip-backed markers sit 28px+ clear of the waveform row below
-        chip(d, (600, 540),
-             "%s · %.1f–%.1fs   %s · %.1f–%.1fs" % (
-                 s0["id"], s0["start"], s0["end"],
-                 turn["segments"][-1]["id"],
-                 turn["segments"][-1]["start"], turn["segments"][-1]["end"]),
-             f["tiny"], fill=PANEL, outline=LINE, anchor="lm",
+        _thread_row(d, f, 196, "Aunt Rosa", "waiting")
+    # Grandpa Emil: opens with turn 2 and stays open.
+    if p > 0.58:
+        _thread_row(d, f, 288, "Grandpa Emil", "open")
+    else:
+        _thread_row(d, f, 288, "Grandpa Emil", "waiting")
+    if p > 0.58:
+        chip(d, (970, 400), "next question asks about",
+             f["tiny"], fill=CARD, outline=LINE, anchor="ma",
              text_fill=MUTED)
-    for i in range(48):  # device waveform (capped so it never nears the chips)
-        hh = 10 + 46 * abs(math.sin(i * 0.7 + p * 30)) * (0.3 + 0.7 * tp)
-        x = 600 + i * 12
-        d.rectangle([x, 648 - hh, x + 8, 648], fill=ACCENT)
-
-
-NODES = [
-    ("Aunt Rosa", "person", 300, 300),
-    ("Grandpa Emil", "person", 300, 510),
-    ("family farm", "place", 640, 220),
-    ("red barn", "place", 640, 410),
-    ("county fair", "place", 640, 580),
-    ("grew up on a farm", "event", 990, 300),
-    ("barn built · 1958", "event", 990, 500),
-]
-EDGES = [(0, 2), (0, 5), (5, 2), (1, 3), (1, 6), (6, 3), (0, 4)]
-KIND_FILL = {"person": (220, 235, 228), "place": (224, 232, 244), "event": (246, 236, 220)}
-
-
-def frame_graph(img, d, f, p):
-    text(d, (80, 56), "Think — facts become a family graph", f["h"])
-    boxes = {}
-    for j, (label, kind, cx, cy) in enumerate(NODES):
-        if p < 0.05 + j * 0.08:
-            continue
-        boxes[j] = (cx, cy)
-    for k, (a, b) in enumerate(EDGES):  # edges first, nodes on top
-        if p > 0.62 + k * 0.04 and a in boxes and b in boxes:
-            d.line([boxes[a], boxes[b]], fill=MUTED, width=3)
-    for j, (cx, cy) in boxes.items():
-        label, kind, _, _ = NODES[j]
-        bw, bh = 250, 88  # tall enough that kind never touches the edge
-        box = [cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2]
-        d.rounded_rectangle(box, radius=10, fill=KIND_FILL[kind], outline=LINE, width=2)
-        text(d, (cx, cy - 16), label, f["small"], anchor="ma")
-        text(d, (cx, cy + 16), kind, f["tiny"], fill=MUTED, anchor="ma")
-    if p > 0.62:
-        chip(d, (80, 652),
-             "%d nodes · %d links" % (
-                 len(boxes),
-                 sum(1 for k in range(len(EDGES)) if p > 0.62 + k * 0.04)),
-             f["tiny"], fill=CARD, outline=LINE, anchor="lm",
+    if p > 0.64:
+        chip(d, (970, 440), "the oldest open thread",
+             f["tiny"], fill=CARD, outline=LINE, anchor="ma",
              text_fill=MUTED)
+    if p > 0.82:
+        chip(d, (970, 520), "re-mention covers the thread",
+             f["tiny"], fill=CARD, outline=ACCENT, anchor="ma",
+             text_fill=MUTED)
+
+
+def frame_continue(img, d, f, p):
+    text(d, (80, 56), "Keep going — past the old 3-round limit", f["h"])
+    # six turn boxes fill in order; box 3 carries the old limit, 4+ is new.
+    n = min(6, int(p * 7))
+    for i in range(6):
+        x0 = 80 + i * 182
+        on = i < n
+        d.rounded_rectangle([x0, 200, x0 + 158, 330], radius=12,
+                            fill=ACCENT if on else PANEL,
+                            outline=ACCENT if on else LINE, width=2)
+        ink = "white" if on else MUTED
+        d.text((x0 + 79, 245), "%d" % (i + 1), font=f["h"], fill=ink,
+               anchor="mm")
+        d.text((x0 + 79, 295), "turn %d" % (i + 1), font=f["tiny"],
+               fill=ink, anchor="mm")
+        if i == 2 and p > 0.45:
+            chip(d, (x0 + 79, 360), "old limit was 3",
+                 f["tiny"], fill=CARD, outline=LINE, anchor="ma",
+                 text_fill=MUTED)
+    if p > 0.55:
+        chip(d, (640, 440), "turn counter passes 3 — no forced stop",
+             f["body"], fill=CARD, outline=ACCENT, anchor="ma",
+             text_fill=INK)
+    if p > 0.7:
+        bubble(d, 240, 490, 800,
+               wrap(d, "Can you tell me more about Grandpa Emil? "
+                    "The follow-up prefers the oldest open thread.",
+                    f["small"], 760) or ["…"], f["small"])
 
 
 def fiction_banner(d, f):
@@ -533,51 +594,97 @@ def frame_map(img, d, f, p):
         text(d, (cx, ly + 16), name, f["tiny"], anchor="mm")
     chip(d, (px, py + ph + 30), OSM_CREDIT,
          f["tiny"], fill=CARD, outline=LINE, anchor="lm", text_fill=MUTED)
-    chip(d, (px + pw, py + ph + 30), "same 3 fictional points as the graph",
+    chip(d, (px + pw, py + ph + 30), "3 fictional pins · distances in km",
          f["tiny"], fill=CARD, outline=LINE, anchor="rm", text_fill=MUTED)
 
 
-def frame_records(img, d, f, p):
-    text(d, (80, 56), "Save — every fact cites its clip slice", f["h"])
-    text(d, (80, 122), "saved facts file · facts.jsonl", f["body"])
-    y = 180
-    shown = 0
-    for j, r in enumerate(ROWS):
-        if p < 0.06 + j * 0.13:
-            continue
-        shown += 1
-        d.rounded_rectangle([80, y, 1200, y + 62], radius=8, fill=PANEL,
+def frame_pause(img, d, f, p):
+    text(d, (80, 56), "Tired? — a gentle pause, never a stop", f["h"])
+    if p > 0.08:
+        bubble(d, 80, 150, 560,
+               wrap(d, "I'm tired, let's pick this up another time.",
+                    f["small"], 520) or ["…"], f["small"])
+    if p > 0.3:
+        chip(d, (80, 300), "pause_suggested: true (tiredness cue)",
+             f["small"], fill=CARD, outline=ACCENT, anchor="lm",
+             text_fill=INK)
+    # pause banner with the two real UI choices.
+    if p > 0.45:
+        d.rounded_rectangle([80, 380, 1200, 620], radius=14, fill=PANEL,
+                            outline=ACCENT, width=3)
+        text(d, (640, 430), "Take a break? Your stories are saved.",
+             f["body"], anchor="ma")
+        d.rounded_rectangle([200, 490, 580, 570], radius=10, fill=CARD,
                             outline=LINE, width=2)
-        text(d, (104, y + 31), r["kind"], f["small"], fill=ACCENT, anchor="lm")
-        t = r["text"]
-        if d.textlength(t, font=f["small"]) > 560:
-            while t and d.textlength(t + "…", font=f["small"]) > 560:
-                t = t[:-1]
-            t += "…"
-        text(d, (250, y + 31), t, f["small"], anchor="lm")
-        text(d, (1176, y + 31), "%s %.1f–%.1fs" % (r["clip"], r["start"], r["end"]),
-             f["tiny"], fill=MUTED, anchor="rm")
-        y += 70
-    chip(d, (80, 652),
-         "%d turns · %d segments · %d saved facts (from demo/script.json)" % (
-             N_TURNS, N_SEGS, shown),
-         f["tiny"], fill=CARD, outline=LINE, anchor="lm", text_fill=MUTED)
+        text(d, (390, 530), "Keep going", f["body"], anchor="mm")
+        d.rounded_rectangle([700, 490, 1080, 570], radius=10, fill=ACCENT)
+        text(d, (890, 530), "Pause & save", f["body"], fill="white",
+             anchor="mm")
+    if p > 0.7:
+        chip(d, (640, 650), "the server never force-stops — pausing is your choice",
+             f["tiny"], fill=CARD, outline=LINE, anchor="ma",
+             text_fill=MUTED)
+
+
+def frame_resume(img, d, f, p):
+    text(d, (80, 56), "Resume — your code is your session", f["h"])
+    # left: the resume code card; right: what resume_from carries.
+    if p > 0.08:
+        d.rounded_rectangle([80, 150, 560, 470], radius=14, fill=CARD,
+                            outline=LINE, width=2)
+        text(d, (320, 200), "Your resume code", f["body"], anchor="ma")
+        text(d, (320, 300), "demo-synthetic", _font(40, bold=True),
+             fill=ACCENT, anchor="ma")
+        text(d, (320, 370), "shown at Pause & save", f["small"],
+             fill=MUTED, anchor="ma")
+        chip(d, (320, 420), "the code IS the session_id",
+             f["tiny"], fill=PANEL, outline=LINE, anchor="ma",
+             text_fill=MUTED)
+    if p > 0.35:
+        # arrow from the code card to the new session card.
+        d.line([(580, 310), (680, 310)], fill=ACCENT, width=4)
+        d.polygon([(680, 292), (712, 310), (680, 328)], fill=ACCENT)
+        d.rounded_rectangle([720, 150, 1200, 470], radius=14, fill=CARD,
+                            outline=ACCENT, width=3)
+        text(d, (960, 200), "New session · demo-resumed", f["body"],
+             anchor="ma")
+        text(d, (960, 260), "resume_from carries over", f["small"],
+             fill=MUTED, anchor="ma")
+        text(d, (960, 310), "%d open thread + %d saved facts" % (
+            N_STILL_OPEN, N_FACTS), _font(30, bold=True), fill=INK,
+            anchor="ma")
+        text(d, (960, 370), "map facts included", f["small"], fill=MUTED,
+             anchor="ma")
+        chip(d, (960, 420), "unknown codes start clean",
+             f["tiny"], fill=PANEL, outline=LINE, anchor="ma",
+             text_fill=MUTED)
+    if p > 0.65:
+        bubble(d, 180, 500, 920,
+               wrap(d, "Opening question re-opens the carried thread: "
+                    "Can you tell me more about Grandpa Emil?",
+                    f["small"], 880) or ["…"], f["small"])
 
 
 def frame_payoff(img, d, f, p):
-    text(d, (W / 2, 120), "Three turns become lasting history", f["h"], anchor="ma")
-    vals = [(N_TURNS, "turns"), (N_SEGS, "segments"), (len(ROWS), "saved facts")]
+    text(d, (W / 2, 120), "Loose ends become lasting history", f["h"],
+         anchor="ma")
+    vals = [(N_TURNS, "turns told"), (N_SEGS, "segments"),
+            (N_FACTS, "saved facts")]
     for j, (v, label) in enumerate(vals):
         cx = 340 + j * 300
         n = int(v * min(1.0, max(0.0, p * 1.4 - j * 0.15)))
-        text(d, (cx, 330), str(n), _font(110, bold=True), fill=ACCENT, anchor="ma")
-        text(d, (cx, 430), label, f["body"], anchor="ma")
+        # numerals are top-anchored ("ma"), so sit them high: glyph bottoms
+        # (~110px) would otherwise touch the labels (v5 caught this by eye).
+        text(d, (cx, 225), str(n), _font(110, bold=True), fill=ACCENT, anchor="ma")
+        text(d, (cx, 360), label, f["body"], anchor="ma")
     if p > 0.55:
-        text(d, (W / 2, 540), "Every fact links back to the voice that said it.",
+        text(d, (W / 2, 460),
+             "%d threads opened · 1 covered · %d carried into the resume" % (
+                 N_OPEN, N_STILL_OPEN),
              f["body"], anchor="ma")
     if p > 0.75:
-        text(d, (W / 2, 600), "timeline + family map + replay", f["small"],
-             fill=MUTED, anchor="ma")
+        text(d, (W / 2, 530), "saved facts file · every fact replays its clip",
+             f["small"], fill=MUTED, anchor="ma")
 
 
 def frame_outro(img, d, f, p):
@@ -596,39 +703,40 @@ def frame_outro(img, d, f, p):
              f["small"], fill=MUTED, anchor="ma")
 
 
-SCENES = [("title", 8), ("talk", 18), ("graph", 14), ("map", 16),
-          ("records", 14), ("payoff", 10), ("outro", 10)]
-FUNCS = {"title": frame_title, "talk": frame_talk, "graph": frame_graph,
-         "map": frame_map, "records": frame_records, "payoff": frame_payoff,
+SCENES = [("title", 8), ("threads", 14), ("continue", 12), ("pause", 12),
+          ("resume", 12), ("map", 12), ("payoff", 10), ("outro", 10)]
+FUNCS = {"title": frame_title, "threads": frame_threads,
+         "continue": frame_continue, "pause": frame_pause,
+         "resume": frame_resume, "map": frame_map, "payoff": frame_payoff,
          "outro": frame_outro}
-PREVIEW_P = {"title": 0.7, "talk": 0.8, "graph": 0.95, "map": 0.95,
-             "records": 0.95, "payoff": 0.95, "outro": 0.95}
+PREVIEW_P = {"title": 0.7, "threads": 0.95, "continue": 0.95, "pause": 0.95,
+             "resume": 0.95, "map": 0.95, "payoff": 0.95, "outro": 0.95}
 
-# One narration block per scene (~200 words total), describing the process.
-# Each block is padded/trimmed to its scene length so speech never overruns.
+# One narration block per scene (~180 words total), telling the adaptive
+# story. Each block is padded/trimmed to its scene length so speech never
+# overruns (the gate below aborts on any overrun).
 NARRATION = {
     "title": ("Meet the Oral History Interviewer. Every fact links back "
-              "to the voice that said it. Everyone here is fictional."),
-    "talk": ("First, you talk. Three turns, one interview. Each spoken answer "
-             "is saved as an audio clip, sliced into timestamped segments. "
-             "Here, Aunt Rosa remembers the county fair pie prize she won, "
-             "and every slice keeps its start and end time."),
-    "graph": ("Then the system thinks. Each answer becomes facts in a family "
-              "graph. People, places, and events become linked nodes. "
-              "Seven nodes, seven links, each traced to the words that "
-              "produced them."),
-    "map": ("Then the map. The family farm, the red barn, and the county "
+              "to the voice that said it. Everyone is fictional."),
+    "threads": ("First, you talk. Mention Aunt Rosa, and a thread opens in "
+                "the panel. Mention her again, and it is covered. The next "
+                "question prefers the oldest open thread."),
+    "continue": ("The old three-round limit is gone. The counter passes "
+                 "three and keeps going while threads stay open. The next "
+                 "question keeps asking about Grandpa Emil."),
+    "pause": ("When you are tired, just say so. The interview suggests a "
+              "gentle pause, never a stop. Keep going, or pause and save "
+              "your code."),
+    "resume": ("Your resume code is your session name. A new session "
+               "carries the open threads and saved facts, and the opening "
+               "question picks up Grandpa Emil."),
+    "map": ("Then the map. The family farm, the red barn, and the "
             "fairgrounds appear as fictional pins on a real OpenStreetMap "
-            "basemap. Golden arcs mark the real distances between them, "
-            "computed in kilometers."),
-    "records": ("Every fact lands in the saved facts file. Each row cites its "
-                "clip slice to the tenth of a second. Three turns, six "
-                "segments, six saved facts. Play any fact to hear its "
-                "exact moment."),
-    "payoff": ("Three turns become lasting history. Six segments, six saved "
-               "facts, and every single one can be replayed."),
+            "basemap, with real distances between them."),
+    "payoff": ("Four turns and a resume become lasting history. Every "
+               "saved fact links back to the voice that said it."),
     "outro": ("Try it yourself. Run the replay script and bring your own "
-              "family stories. All people and places here are fictional."),
+              "family stories. All people here are fictional."),
 }
 
 
@@ -795,18 +903,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--theme", choices=tuple(THEMES), default="light")
     ap.add_argument("--out", default=None,
-                    help="default: demo/demo_v5_<theme>.mp4")
+                    help="default: demo/demo_v6_<theme>.mp4")
     ap.add_argument("--preview", action="store_true",
-                    help="write one PNG per scene to /tmp/v5prev instead of video")
+                    help="write one PNG per scene to /tmp/v6prev instead of video")
     ap.add_argument("--no-audio", action="store_true",
                     help="skip the neural voiceover mux")
     args = ap.parse_args()
     set_theme(args.theme)
     if args.out is None:
-        args.out = str(HERE / ("demo_v5_%s.mp4" % args.theme))
+        args.out = str(HERE / ("demo_v6_%s.mp4" % args.theme))
     f_global = fonts()
     if args.preview:
-        out = Path("/tmp/v5prev_%s" % args.theme)
+        out = Path("/tmp/v6prev_%s" % args.theme)
         out.mkdir(parents=True, exist_ok=True)
         for idx, (name, _) in enumerate(SCENES):
             render_frame(name, PREVIEW_P[name], f_global, idx,
@@ -818,7 +926,7 @@ def main():
     if args.no_audio:
         render_silent(args.out)
         return
-    tmp = Path("/tmp/v5audio_%s" % args.theme)
+    tmp = Path("/tmp/v6audio_%s" % args.theme)
     silent = tmp / "silent.mp4"
     tmp.mkdir(parents=True, exist_ok=True)
     render_silent(silent)
