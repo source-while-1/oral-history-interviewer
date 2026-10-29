@@ -134,3 +134,23 @@ Recorded during setup. Each entry: decision + why.
 - `demo/make_video.py` renders the same script with Pillow frames piped to
   ffmpeg/libx264. Pillow lives only in the project `.venv` (optional tool);
   server.py and all test suites stay stdlib-only.
+
+## 22. Explainer v2: vendored basemap, fictional banner, "saved facts file"
+- Vendored basemap: `demo/assets/basemap_ohio.png` (six z11 OSM tiles
+  around lat 40.06 lon -82.88, fetched once with a proper User-Agent,
+  composited to 768x512) is committed so `demo/make_video_v2.py` renders
+  fully offline and reproducibly — no network at render time, no tile-URL
+  dependency in the artifact. Missing file fails fast with a re-fetch
+  pointer. Credit "© OpenStreetMap contributors" in demo/README.md, here,
+  the outro frame, and every map frame, per the OSM licence.
+- Fictional banner: real Columbus-area geography under invented pins
+  (family farm, red barn, county fairgrounds) could mislead, so every map
+  frame carries a persistent "Fictional places — illustrative" banner, and
+  the same three points appear in the graph, map, and records scenes.
+  Haversine arcs between them are labeled with real computed km values.
+- "Saved facts file" wording: the store is called only that (facts.jsonl
+  rows: kind/text/clip/start-end) in the video, the tour, and the READMEs —
+  never "database", which would overpromise a query layer v1 does not have.
+- Stats bound to script: turn/segment/fact counts on the records and payoff
+  scenes are read from `demo/script.json` at render time (3 turns,
+  6 segments, 6 rows), so the video cannot drift from the demo it depicts.

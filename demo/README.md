@@ -21,12 +21,23 @@ python3 demo/replay.py
 
 Also in this folder:
 
-- `how-it-works.html` — served at `/how-it-works`; auto-playing 6-scene
-  web tour of one turn (same fictional script).
+- `how-it-works.html` — served at `/how-it-works`; auto-playing 7-scene
+  web tour of one turn (talk → think → map → saved facts file → replay,
+  same fictional script).
 - `make_video.py` → `demo.mp4` — the tour as a 56s 720p video. Needs Pillow
   in the project env: `python3 -m venv .venv && .venv/bin/pip install pillow`,
   then `.venv/bin/python demo/make_video.py`. The server and test suites stay
   stdlib-only; Pillow is only for the optional video render.
+- `make_video_v2.py` → `demo_v2.mp4` — the full 3-turn story as a 90s
+  720p30 video (title, talk, family graph, map, saved facts file, payoff,
+  outro). Preview one frame per scene first:
+  `.venv/bin/python demo/make_video_v2.py --preview` (writes `/tmp/v2prev/`).
+- `assets/basemap_ohio.png` — vendored map tiles around Columbus, Ohio
+  (z11, fetched once from OpenStreetMap; the v2 renderer works offline from
+  this file and fails fast with a clear error when it is missing). Map
+  tiles: © OpenStreetMap contributors. Every map frame is labeled
+  "Fictional places — illustrative": the geography is real, the three pins
+  (family farm, red barn, county fairgrounds) are invented.
 
 Click any fact's ▶ replay to hear (silence of) the exact clip slice it
 cites. The family map fills in with Aunt Rosa and Grandpa Emil via the

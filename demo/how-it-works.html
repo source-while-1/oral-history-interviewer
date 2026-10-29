@@ -34,7 +34,7 @@
 </head>
 <body>
 <h1>How it works</h1>
-<p class="sub">A 50-second tour of one interview turn. All names are fictional.</p>
+<p class="sub">A ~1-minute tour of one interview turn. All names and places are fictional.</p>
 <div id="bar"><div id="fill"></div></div>
 <div id="stage" aria-live="polite"></div>
 <p id="cap"></p>
@@ -51,7 +51,7 @@ const PEOPLE = [["Aunt Rosa", "AR"], ["Grandpa Emil", "GE"]];
 const scenes = [
   { cap: "A voice interviewer for family stories. Push to talk, answer one question at a time.",
     html: `<h2>One turn, end to end</h2>
-      <div class="row"><span class="pill">1 Talk</span><span>→</span><span class="pill">2 Think</span><span>→</span><span class="pill">3 Map</span><span>→</span><span class="pill">4 Replay</span></div>
+      <div class="row"><span class="pill">1 Talk</span><span>→</span><span class="pill">2 Think</span><span>→</span><span class="pill">3 Map</span><span>→</span><span class="pill">4 Saved</span><span>→</span><span class="pill">5 Replay</span></div>
       <p>Every extracted fact cites the exact clip slice where it was said.</p>` },
   { cap: "Hold to talk. The browser transcribes speech into timestamped segments.",
     html: `<h2>1 · Talk</h2>
@@ -68,8 +68,14 @@ const scenes = [
     html: `<h2>3 · Map</h2>
       <p class="fade" data-t="300">undated — grew up on a farm in Ohio [clip 0.0–3.5s]</p>
       <div class="fade" data-t="1000">${PEOPLE.map(p => `<span class="mapdot"><span class="dot">${p[1]}</span>${p[0]}</span>`).join("")}</div>` },
+  { cap: "Facts are appended to a saved facts file — each row cites its clip slice.",
+    html: `<h2>4 · Saved facts file</h2>
+      <p class="fade" data-t="300"><code>saved facts file · facts.jsonl</code></p>
+      <p class="fade" data-t="900"><span class="chip">person · Aunt Rosa · clip-0 0.0–3.5s</span></p>
+      <p class="fade" data-t="1600"><span class="chip">place · red barn · clip-0 3.5–6.0s</span></p>
+      <p class="fade" data-t="2300"><span class="chip">event · barn built 1958 · clip-1 0.0–4.0s</span></p>` },
   { cap: "Click any fact to hear the exact moment it was said.",
-    html: `<h2>4 · Replay</h2>
+    html: `<h2>5 · Replay</h2>
       <div class="row fade" data-t="300"><span>▶ person · Aunt Rosa</span><div class="playbar"><div id="pb"></div></div><span>0.0–3.5s</span></div>` },
   { cap: "Run it offline with the synthetic demo, or live with a Fireworks key.",
     html: `<h2>Try it</h2>

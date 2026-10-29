@@ -78,11 +78,16 @@ Details in [demo/README.md](demo/README.md).
 ## Explainer: animated tour + video
 
 - [`/how-it-works`](http://127.0.0.1:8000/how-it-works) — auto-playing
-  6-scene web tour of one turn (talk → think → map → replay), with
-  play/back/next/replay controls and `prefers-reduced-motion` support.
+  7-scene web tour of one turn (talk → think → map → saved facts file →
+  replay), with play/back/next/replay controls and `prefers-reduced-motion`
+  support.
 - [`demo/demo.mp4`](demo/demo.mp4) — the same tour as a 56s 720p video,
   rendered by [`demo/make_video.py`](demo/make_video.py) (Pillow frames →
   ffmpeg/libx264; needs Pillow: `python3 -m venv .venv && .venv/bin/pip install pillow`).
+- [`demo/demo_v2.mp4`](demo/demo_v2.mp4) — the full 3-turn story as a 90s
+  720p30 video, rendered by [`demo/make_video_v2.py`](demo/make_video_v2.py)
+  off the vendored [`demo/assets/basemap_ohio.png`](demo/assets/basemap_ohio.png)
+  (map: © OpenStreetMap contributors; all pins fictional).
 
 ## Demo tests
 
