@@ -46,7 +46,7 @@ FIREWORKS_BASE_URL = os.environ.get(
 ).rstrip("/")
 FIREWORKS_URL = FIREWORKS_BASE_URL + "/chat/completions"
 FIREWORKS_MODEL = os.environ.get(
-    "FIREWORKS_MODEL", "accounts/fireworks/models/llama-v3p1-8b-instruct"
+    "FIREWORKS_MODEL", "accounts/fireworks/models/glm-5p3-flash"
 )
 # Reserved for the documented server-side STT upgrade path (not called in v1).
 FIREWORKS_STT_MODEL = os.environ.get("FIREWORKS_STT_MODEL", "whisper-v3-turbo")
@@ -149,6 +149,28 @@ def mock_fatigue_shortened(transcript_text, prior_word_counts):
     return cur < MOCK_FATIGUE_RATIO * mean
 
 
+def fatigue_session_context(turn_count, transcript_text, prior_word_counts):
+    """One-line trend note for the fatigue judge; None when no history yet.
+
+    Gives the model what a single-turn view hides: where this turn falls
+    in the interview and how its length compares with the speaker's own
+    recent answers, so sudden shortening after rich answers reads as a
+    fatigue cue while steady short answers read as the speaker's style.
+    Length only, never keywords.
+    """
+    priors = [w for w in (prior_word_counts or []) if w > 0]
+    if not priors:
+        return None
+    mean = sum(priors) / len(priors)
+    cur = word_count(transcript_text)
+    note = (f"turn {turn_count} of this interview; speaker's {len(priors)} "
+            f"prior answer(s) averaged {mean:.0f} words; this answer is "
+            f"{cur} words")
+    if len(priors) >= 1 and mean >= 1 and cur < MOCK_FATIGUE_RATIO * mean:
+        note += ", a sudden shortening"
+    return note + "."
+
+
 def parse_fatigue(parsed):
     """Validate the model's fatigue judgment from parsed extraction JSON.
 
@@ -182,9 +204,13 @@ def sanitize_id(raw, default="default"):
         if c.isalnum() or c in "-_"
     )
     return cleaned or default
-# Generous budgets: reasoning-style models (e.g. muse-spark-open) spend tokens
-# on reasoning traces before the answer; small budgets truncate to "".
-FOLLOWUP_MAX_TOKENS = int(os.environ.get("FIREWORKS_FOLLOWUP_MAX_TOKENS", "1024"))
+# Tight budgets matched to the fast default model: the follow-up is one
+# short question (~60 tokens suffice). The extraction JSON carries facts
+# plus opened-thread proposals and stays verbose (~1500 tokens observed),
+# so its cap stays generous: a truncated object parses to nothing and
+# would silently drop facts AND the fatigue judgment. Both caps remain
+# overridable via FIREWORKS_FOLLOWUP/FACTS_MAX_TOKENS env vars.
+FOLLOWUP_MAX_TOKENS = int(os.environ.get("FIREWORKS_FOLLOWUP_MAX_TOKENS", "512"))
 FACTS_MAX_TOKENS = int(os.environ.get("FIREWORKS_FACTS_MAX_TOKENS", "2048"))
 
 
@@ -338,6 +364,13 @@ def _post_chat(messages, response_format=None, max_tokens=128, temperature=0.5):
     if not api_key:
         raise RuntimeError("FIREWORKS_API_KEY not set")
     payload = {"model": FIREWORKS_MODEL, "messages": messages}
+    # The default model reasons before answering (100-220+ reasoning tokens
+    # even for a one-line question); "low" effort keeps judgment quality
+    # while cutting the trace that dominates turn latency. Empty string
+    # omits the field for models that do not accept it.
+    if os.environ.get("FIREWORKS_REASONING_EFFORT", "low"):
+        payload["reasoning_effort"] = os.environ.get(
+            "FIREWORKS_REASONING_EFFORT", "low")
     if response_format is not None:
         payload["response_format"] = response_format
     payload["max_tokens"] = max_tokens
@@ -363,7 +396,10 @@ def gen_followup(history, transcript_text, open_threads=None):
     to prefer the most salient OPEN thread; with no open threads it asks a
     fresh question.
     """
-    history_tail = json.dumps(history)[-4000:]
+    # Trimmed prompts: only the recent tail affects the next question, and
+    # prompt (prefill) tokens are cheap next to generated tokens — but
+    # smaller prompts still shave prefill time on every turn.
+    history_tail = json.dumps(history)[-2000:]
     open_threads = [t for t in (open_threads or []) if t.get("status") == "open"]
     thread_hint = ""
     if open_threads:
@@ -385,7 +421,7 @@ def gen_followup(history, transcript_text, open_threads=None):
         },
         {
             "role": "user",
-            "content": f"History: {history_tail}\nLatest turn: {transcript_text[-1500:]}",
+            "content": f"History: {history_tail}\nLatest turn: {transcript_text[-1000:]}",
         },
     ]
     return _post_chat(messages, max_tokens=FOLLOWUP_MAX_TOKENS, temperature=0.6).strip()
@@ -402,12 +438,16 @@ FATIGUE_INSTRUCTIONS = (
     "historical mentions "
     '("my father was tired after the war", "the work was exhausting '
     'back then") and for vivid detailed storytelling even if it contains '
-    'the word "tired". When unsure, false; reason is a short quote or '
-    "paraphrase."
+    'the word "tired". A reply that is suddenly much shorter than the '
+    "speaker's own recent answers (flagged in the session context) is a "
+    "fatigue cue; a short reply that still tells a complete vivid story, "
+    "or matches the speaker's usual length, is not. When unsure, false; "
+    "reason is a short quote or paraphrase."
 )
 
 
-def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
+def extract_facts_raw(transcript_text, valid_ids, open_threads=None,
+                      fatigue_context=None):
     """Call 2: JSON-mode fact+thread+fatigue extraction with segment_ids.
 
     Returns (facts, threads_opened, threads_covered_ids, fatigue).
@@ -415,6 +455,10 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
     thread-id or text strings; fatigue is {"tired": bool, "reason": str}
     (model judgment of the speaker's own state this turn, validated by
     parse_fatigue). No extra LLM call: fatigue rides the existing call.
+    fatigue_context is an optional one-line session-trend note (turn number,
+    the speaker's prior-answer mean length, this answer's length) appended
+    to the judged text so sudden shortening is visible; None sends the
+    turn alone, as before.
     """
     open_hint = ""
     if open_threads:
@@ -443,7 +487,11 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
                 + FATIGUE_INSTRUCTIONS
             ),
         },
-        {"role": "user", "content": transcript_text[-4000:] or "(no transcript)"},
+        {"role": "user", "content": (
+            (transcript_text[-2500:] or "(no transcript)")
+            + (f" Session context: {fatigue_context}"
+               if fatigue_context else "")
+        )},
     ]
     content = _post_chat(
         messages,
@@ -469,7 +517,8 @@ def extract_facts_raw(transcript_text, valid_ids, open_threads=None):
     return facts, opened, covered, parse_fatigue(parsed)
 
 
-def run_llm_turn(history, transcript_text, segments, open_threads=None):
+def run_llm_turn(history, transcript_text, segments, open_threads=None,
+                 fatigue_context=None):
     """Run follow-up + fact/thread/fatigue extraction.
 
     Still two concurrent calls (fatigue rides call 2, no added latency);
@@ -479,7 +528,7 @@ def run_llm_turn(history, transcript_text, segments, open_threads=None):
         q_future = pool.submit(gen_followup, history, transcript_text, open_threads)
         f_future = pool.submit(
             extract_facts_raw, transcript_text,
-            [s["id"] for s in segments], open_threads,
+            [s["id"] for s in segments], open_threads, fatigue_context,
         )
         question = q_future.result()
         raw_facts, opened, covered, fatigue = f_future.result()
@@ -796,6 +845,16 @@ class Handler(BaseHTTPRequestHandler):
         fallback = False
         llm_opened, llm_covered = [], []
         llm_tired = False
+        # turn_count includes the turn being saved; prior word counts are
+        # this session's answers so far (current turn not yet appended).
+        try:
+            prior_turns = sum(1 for _ in open(transcript_path)) if transcript_path.exists() else 0
+        except OSError:
+            prior_turns = 0
+        turn_count = prior_turns + 1
+        prior_word_counts = load_prior_word_counts(session_dir)
+        fatigue_context = fatigue_session_context(
+            turn_count, transcript_text, prior_word_counts)
         try:
             if use_mock:
                 question, facts = mock_llm_turn(history, transcript_text, segments,
@@ -817,7 +876,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 (question, raw_facts, llm_opened, llm_covered,
                  fatigue) = run_llm_turn(
-                    history, transcript_text, segments, open_for_prompt)
+                    history, transcript_text, segments, open_for_prompt,
+                    fatigue_context)
                 facts = resolve_fact_links(raw_facts, clip_id, seg_by_id)
                 llm_tired = bool((fatigue or {}).get("tired"))
         except Exception as e:  # fall back to stub so the loop stays runnable
@@ -865,15 +925,10 @@ class Handler(BaseHTTPRequestHandler):
                     "Can you tell me about a person who shaped your childhood?",
                     "What is a moment you are proud of that we should record?",
                 ][n % 3]
-        # turn_count includes the turn being saved.
-        try:
-            prior_turns = sum(1 for _ in open(transcript_path)) if transcript_path.exists() else 0
-        except OSError:
-            prior_turns = 0
-        turn_count = prior_turns + 1
+        # turn_count / prior_word_counts were computed before the LLM
+        # calls (same values: the current turn is appended below).
         # MOCK proxy baseline: word counts of this session's prior turns.
         # Real path: the model's own fatigue judgment from call 2.
-        prior_word_counts = load_prior_word_counts(session_dir)
         suggested = pause_suggested(
             turn_count, transcript_text, prior_word_counts,
             llm_tired=llm_tired)
