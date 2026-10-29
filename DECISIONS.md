@@ -204,3 +204,16 @@ Recorded during setup. Each entry: decision + why.
   `say -v '?'`, audio stream 90s, mean level sane).
 - Retouches deferred to next version: payoff numerals sit ~3px high;
   graph edge passes behind the red-barn node (text unobscured).
+
+## 26. v5: real display typography + neural voiceover
+- Why: v4's Plex Sans loaded correctly but read as a default grotesque.
+  Titles/kickers now use vendored IBM Plex Serif Bold (static cuts in
+  `assets/fonts/`, OFL) with manual letterspacing on kickers; body stays
+  Plex Sans. The pairing is visibly designed, not default.
+- Voice: `say`/Samantha replaced by edge-tts `en-US-AvaNeural` (free,
+  keyless, network at render only). Fireworks hosts no TTS-capable model
+  on this account (29 models listed, none speech); ElevenLabs would need
+  a user-supplied key, so edge-tts is the no-blocker path.
+- Ava speaks slower than Samantha: the build's overrun gate caught graph
+  (+1.2s) and records (+0.1s) overruns, fixed by trimming 6 words total.
+  This is the gate working as designed, not a defect.

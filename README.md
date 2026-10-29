@@ -90,6 +90,10 @@ Details in [demo/README.md](demo/README.md).
   Samantha voiceover (AAC). Rendered by
   [`demo/make_video_v2.py`](demo/make_video_v2.py)
   (`.venv/bin/python demo/make_video_v2.py --theme light|dark`).
+- v5: [`demo/demo_v5_light.mp4`](demo/demo_v5_light.mp4) and
+  [`demo/demo_v5_dark.mp4`](demo/demo_v5_dark.mp4) — Plex Serif display
+  type with letterspaced kickers, edge-tts Ava neural voiceover.
+  Needs `edge-tts` in the project env.
 - v3 restyle: [`demo/demo_v3_light.mp4`](demo/demo_v3_light.mp4) and
   [`demo/demo_v3_dark.mp4`](demo/demo_v3_dark.mp4) — the 90s v2 story with
   section chrome (kickers, footer progress), light + dark themes (silent).

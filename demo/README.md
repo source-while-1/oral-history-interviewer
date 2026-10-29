@@ -37,6 +37,10 @@ Also in this folder:
   padded label chips, Samantha voiceover muxed per scene
   (`--out demo/demo_v4_light.mp4`). Build fails fast on narration overrun,
   missing voice, or bad mux (audio stream 90s, sane levels).
+- v5: Plex Serif display titles + letterspaced kickers; voice is edge-tts
+  `en-US-AvaNeural` (no key needed, network at render time).
+  `.venv/bin/pip install edge-tts`, then render `--out demo/demo_v5_light.mp4`.
+  Serif cuts live in `assets/fonts/` next to the Sans variable font.
 - v4 (designed + voiced): same script renders `demo_v4_light.mp4` /
   `demo_v4_dark.mp4` (90s, 720p30, h264 + AAC). New in v4: vendored
   IBM Plex Sans (`assets/fonts/IBMPlexSans-Variable.ttf`, Regular body /

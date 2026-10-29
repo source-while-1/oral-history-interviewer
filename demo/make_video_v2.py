@@ -1,10 +1,11 @@
-"""Render demo_v4 light/dark explainers: the ~90s v2 story, designed + voiced.
+"""Render demo_v5 light/dark explainers: Plex Serif display type, sticker
+portraits, layout chips, and an edge-tts neural voiceover.
 
 Pure Pillow frames (1280x720@30fps) piped to ffmpeg/libx264. All people,
 places, and events are fictional (Aunt Rosa, Grandpa Emil, Ohio farm).
 Script lines, turn counts, and segment counts are read from
 demo/script.json so on-screen stats always match the real demo script.
-A Samantha voiceover (macOS `say`, one block per scene, padded/trimmed to
+An edge-tts neural voiceover (one block per scene, padded/trimmed to
 the scene length) is muxed as AAC so narration never overruns its scene.
 
 Map scene draws on demo/assets/basemap_ohio.png (vendored OpenStreetMap
@@ -14,7 +15,7 @@ fails fast with a clear error when it is missing.
 The on-screen store is always called the "saved facts file" (facts.jsonl).
 
 Usage:
-  .venv/bin/python demo/make_video_v2.py [--out demo/demo_v4_light.mp4]
+  .venv/bin/python demo/make_video_v2.py [--out demo/demo_v5_light.mp4]
   .venv/bin/python demo/make_video_v2.py --preview   # one PNG per scene
   .venv/bin/python demo/make_video_v2.py --theme dark --no-audio
 """
@@ -93,15 +94,15 @@ def chip(d, xy, s, font, fill=None, outline=None, anchor="mm",
 
 def chrome(d, f, idx, overall, kicker=None):
     """Section chrome: kicker header + footer progress (theme-aware)."""
-    text(d, (80, 22), SCENE_KICKER[SCENES[idx][0]], f["tiny"],
-         fill=ACCENT if kicker is None else kicker)
+    tracked(d, (80, 12), SCENE_KICKER[SCENES[idx][0]], f["kick"],
+            ACCENT if kicker is None else kicker, anchor="la")
     d.line([(80, 50), (1200, 50)], fill=LINE, width=2)
     d.rectangle([80, H - 22, 1200, H - 16], fill=LINE)
     d.rectangle([80, H - 22, 80 + int(1120 * overall), H - 16], fill=ACCENT)
     # version label floats on its own chip 14px above the bar so the two
     # never touch (v3 drew the text directly onto the bar row).
     chip(d, (1200, H - 44),
-         "demo v4 · %s · scene %d/%d" % (THEME_NAME, idx + 1, len(SCENES)),
+         "demo v5 · %s · scene %d/%d" % (THEME_NAME, idx + 1, len(SCENES)),
          f["tiny"], fill=CARD, outline=LINE, anchor="ra",
          text_fill=MUTED)
 
@@ -176,6 +177,8 @@ def basemap():
 
 
 PLEX = HERE / "assets" / "fonts" / "IBMPlexSans-Variable.ttf"
+SERIF = HERE / "assets" / "fonts" / "IBMPlexSerif-Regular.ttf"
+SERIF_BOLD = HERE / "assets" / "fonts" / "IBMPlexSerif-Bold.ttf"
 _FONT_CANDS = [
     str(PLEX),  # vendored first (see demo/README.md for the OFL note)
     "/System/Library/Fonts/Helvetica.ttc",
@@ -188,19 +191,24 @@ _FONT_CANDS = [
 _FONT_CACHE = {}
 
 
-def _font(size, bold=False):
-    """Vendored Plex Sans first, system fonts next, PIL default last.
+def _font(size, bold=False, family="sans"):
+    """Vendored IBM Plex first, system fonts next, PIL default last.
 
-    Bold comes from the variable font's wght axis; system fallbacks
-    have no variable axis, so they render un-bolded rather than failing.
-    Loaded once per (size, bold) and cached for the 2700-frame renders.
+    Sans titles/body use the variable Plex Sans (Bold via the wght axis);
+    display titles use Plex Serif static cuts. System fallbacks have no
+    variable axis, so they render un-bolded rather than failing.
+    Loaded once per (size, bold, family) and cached for the renders.
     """
-    key = (size, bold)
+    key = (size, bold, family)
     if key not in _FONT_CACHE:
-        for path in _FONT_CANDS:
+        if family == "serif":
+            cands = [str(SERIF_BOLD if bold else SERIF)] + _FONT_CANDS[1:]
+        else:
+            cands = list(_FONT_CANDS)
+        for path in cands:
             try:
                 ft = ImageFont.truetype(path, size)
-                if bold:
+                if bold and family == "sans":
                     try:
                         ft.set_variation_by_name("Bold")
                     except Exception:
@@ -216,12 +224,29 @@ def _font(size, bold=False):
 
 def fonts():
     return {
-        "title": _font(64, bold=True),
-        "h": _font(42, bold=True),
+        "title": _font(64, bold=True, family="serif"),
+        "h": _font(42, bold=True, family="serif"),
         "body": _font(30),
         "small": _font(24),
         "tiny": _font(20),
+        "kick": _font(20, bold=True),
     }
+
+
+def tracked(draw, xy, s, font, fill, anchor="la", ls=3):
+    """Draw with manual letterspacing (display kickers)."""
+    widths = [draw.textlength(ch, font=font) for ch in s]
+    total = sum(widths) + ls * (len(s) - 1)
+    x, y = xy
+    if anchor in ("ma", "mm"):
+        x -= total / 2
+    elif anchor in ("ra", "rm"):
+        x -= total
+    for ch, w in zip(s, widths):
+        draw.text((x, y), ch, font=font, fill=fill,
+                  anchor=("l" + anchor[1]) if len(anchor) == 2 else "la")
+        x += w + ls
+    return total
 
 
 def text(draw, xy, s, font, fill=None, anchor="la"):
@@ -588,18 +613,18 @@ NARRATION = {
              "is saved as an audio clip, sliced into timestamped segments. "
              "Here, Aunt Rosa remembers the county fair pie prize she won, "
              "and every slice keeps its start and end time."),
-    "graph": ("Then the system thinks. Every answer becomes facts in a family "
-              "graph. People, places, and events become nodes, linked "
-              "together as they were mentioned. Seven nodes, seven links, "
-              "each one traced to the words that produced them."),
+    "graph": ("Then the system thinks. Each answer becomes facts in a family "
+              "graph. People, places, and events become linked nodes. "
+              "Seven nodes, seven links, each traced to the words that "
+              "produced them."),
     "map": ("Then the map. The family farm, the red barn, and the county "
             "fairgrounds appear as fictional pins on a real OpenStreetMap "
             "basemap. Golden arcs mark the real distances between them, "
             "computed in kilometers."),
     "records": ("Every fact lands in the saved facts file. Each row cites its "
-                "clip slice, down to the tenth of a second. Three turns, six "
-                "segments, six saved facts. Play any fact to hear the exact "
-                "moment it came from."),
+                "clip slice to the tenth of a second. Three turns, six "
+                "segments, six saved facts. Play any fact to hear its "
+                "exact moment."),
     "payoff": ("Three turns become lasting history. Six segments, six saved "
                "facts, and every single one can be replayed."),
     "outro": ("Try it yourself. Run the replay script and bring your own "
@@ -623,22 +648,37 @@ def _probe_secs(path):
     return float(r.stdout.strip())
 
 
-VOICE = "Samantha"
+VOICE = "en-US-AvaNeural"
+
+
+async def _edge_voices():
+    import edge_tts
+    return [v["ShortName"] for v in await edge_tts.list_voices()]
 
 
 def _check_voice():
-    """Fail fast unless the named `say` voice is installed.
+    """Fail fast unless the named edge-tts neural voice is reachable.
 
-    The muxed track is byte-deterministic `say -v Samantha` output for
-    the NARRATION text, so the "Samantha voiceover" claim rests on this
-    voice actually rendering (not a silent fallback).
+    The muxed track is edge-tts synthesis of the NARRATION text, so the
+    voiceover claim rests on this voice actually rendering (not a silent
+    fallback). Requires network at render time.
     """
-    r = subprocess.run(["say", "-v", "?"], capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit("make_video_v2: `say -v '?'` failed; cannot confirm voice")
-    if VOICE not in r.stdout.split():
-        sys.exit("make_video_v2: voice %r not installed; refusing silent "
+    try:
+        import asyncio
+        names = asyncio.run(_edge_voices())
+    except Exception as e:
+        sys.exit("make_video_v2: edge-tts voice list failed (%s); refusing "
+                 "silent fallback" % e)
+    if VOICE not in names:
+        sys.exit("make_video_v2: voice %r not available; refusing silent "
                  "fallback" % VOICE)
+
+
+def _synth(text, out_path):
+    """Render narration audio with the edge-tts neural voice (mp3)."""
+    import asyncio
+    import edge_tts
+    asyncio.run(edge_tts.Communicate(text, VOICE).save(str(out_path)))
 
 
 def _mean_db(path):
@@ -673,7 +713,7 @@ def verify_audio(path, expect_secs):
 
 
 def build_narration(tmpdir):
-    """Render one padded/trimmed wav per scene with `say`, then concat.
+    """Render one padded/trimmed wav per scene with edge-tts, then concat.
 
     Returns (wav_path, [(scene, speech_secs, scene_secs, words)]).
     """
@@ -687,12 +727,11 @@ def build_narration(tmpdir):
     parts = []
     report = []
     for name, secs in SCENES:
-        aiff = tmpdir / ("%s.aiff" % name)
+        mp3 = tmpdir / ("%s.mp3" % name)
         out = tmpdir / ("%s.wav" % name)
-        _run(["say", "-v", VOICE, "-o", str(aiff),
-              "--file-format=AIFF", NARRATION[name]])
-        speech = _probe_secs(aiff)
-        _run(["ffmpeg", "-y", "-i", str(aiff),
+        _synth(NARRATION[name], mp3)
+        speech = _probe_secs(mp3)
+        _run(["ffmpeg", "-y", "-i", str(mp3),
               "-af", "apad,atrim=0:%d" % secs,
               "-ar", "44100", "-ac", "1", str(out)])
         fitted = _probe_secs(out)
@@ -756,18 +795,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--theme", choices=tuple(THEMES), default="light")
     ap.add_argument("--out", default=None,
-                    help="default: demo/demo_v4_<theme>.mp4")
+                    help="default: demo/demo_v5_<theme>.mp4")
     ap.add_argument("--preview", action="store_true",
-                    help="write one PNG per scene to /tmp/v4prev instead of video")
+                    help="write one PNG per scene to /tmp/v5prev instead of video")
     ap.add_argument("--no-audio", action="store_true",
-                    help="skip the Samantha voiceover mux")
+                    help="skip the neural voiceover mux")
     args = ap.parse_args()
     set_theme(args.theme)
     if args.out is None:
-        args.out = str(HERE / ("demo_v4_%s.mp4" % args.theme))
+        args.out = str(HERE / ("demo_v5_%s.mp4" % args.theme))
     f_global = fonts()
     if args.preview:
-        out = Path("/tmp/v4prev_%s" % args.theme)
+        out = Path("/tmp/v5prev_%s" % args.theme)
         out.mkdir(parents=True, exist_ok=True)
         for idx, (name, _) in enumerate(SCENES):
             render_frame(name, PREVIEW_P[name], f_global, idx,
@@ -779,7 +818,7 @@ def main():
     if args.no_audio:
         render_silent(args.out)
         return
-    tmp = Path("/tmp/v4audio_%s" % args.theme)
+    tmp = Path("/tmp/v5audio_%s" % args.theme)
     silent = tmp / "silent.mp4"
     tmp.mkdir(parents=True, exist_ok=True)
     render_silent(silent)
@@ -788,7 +827,7 @@ def main():
           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
           "-shortest", str(args.out)])
     verify_audio(args.out, sum(s for _, s in SCENES))
-    print("wrote %s (video + Samantha voiceover)" % args.out)
+    print("wrote %s (video + neural voiceover)" % args.out)
 
 
 if __name__ == "__main__":

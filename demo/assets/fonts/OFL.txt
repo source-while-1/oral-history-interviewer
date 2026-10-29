@@ -9,3 +9,11 @@ License, Version 1.1 (https://openfontlicense.org).
 Vendored here so demo/make_video_v2.py renders offline and reproducibly:
 Regular for body text, Bold (wght=700 variation) for titles and labels.
 Fallback chain when this file is absent: system fonts, then PIL default.
+
+IBM Plex Serif — SIL Open Font License 1.1
+==============================================
+Files: IBMPlexSerif-Regular.ttf, IBMPlexSerif-Bold.ttf,
+IBMPlexSerif-Italic.ttf (static cuts)
+Source: https://github.com/google/fonts/tree/main/ofl/ibmplexserif
+Used for: display titles and kickers in the demo videos.
+Full license text: https://openfontlicense.org
