@@ -28,7 +28,9 @@ fi
 export DEMO_MODE=1 MOCK_LLM=0 PORT
 echo "Starting replay-only demo server on http://127.0.0.1:$PORT ..."
 echo "(DEMO_MODE=1 MOCK_LLM=0 — fictional demo session only, writes blocked)"
-(cd "$ROOT" && python3 server.py) &
+# No subshell: $! must be the python PID itself, or cleanup orphans it.
+cd "$ROOT"
+python3 server.py &
 SRV=$!
 cleanup() {
   kill "$SRV" 2>/dev/null || true
@@ -45,4 +47,6 @@ for _ in $(seq 1 50); do
 done
 
 echo "Opening public tunnel (Ctrl-C stops the server and the tunnel) ..."
-exec cloudflared tunnel --url "http://localhost:$PORT"
+# Not exec: the EXIT trap must survive to stop the server, which (as a
+# background job) ignores the Ctrl-C SIGINT.
+cloudflared tunnel --url "http://localhost:$PORT"
