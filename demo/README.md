@@ -32,6 +32,11 @@ Also in this folder:
   renders `demo_v3_light.mp4` / `demo_v3_dark.mp4` (section kickers, footer
   progress, dimmed basemap in dark). `--preview` writes one PNG per scene to
   `/tmp/v3prev_<theme>` for approval before the full render.
+- v4: same scenes, designed — vendored IBM Plex Sans (`assets/fonts/`, OFL),
+  sticker portraits (white ring + hairline black outline, fixed dark details),
+  padded label chips, Samantha voiceover muxed per scene
+  (`--out demo/demo_v4_light.mp4`). Build fails fast on narration overrun,
+  missing voice, or bad mux (audio stream 90s, sane levels).
 - v4 (designed + voiced): same script renders `demo_v4_light.mp4` /
   `demo_v4_dark.mp4` (90s, 720p30, h264 + AAC). New in v4: vendored
   IBM Plex Sans (`assets/fonts/IBMPlexSans-Variable.ttf`, Regular body /

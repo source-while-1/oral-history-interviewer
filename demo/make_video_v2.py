@@ -278,18 +278,20 @@ def _sticker_layer(art):
 _STICKER_CACHE = {}
 
 
-def _portrait_base(img, d, label, label_xy, draw_art):
+def _portrait_base(img, d, key, label, label_xy, draw_art):
     """Stickerize portrait art onto img, name on a chip (never in sticker).
 
     The sticker art uses fixed colors on both themes, so each portrait is
-    composited once and cached; only the cheap chip redraws per frame.
+    composited once per geometry and cached; only the cheap chip redraws per
+    frame. The key MUST include position: the same person appears at title
+    positions and talk positions, and a label-only key reuses the wrong art.
     """
-    layer = _STICKER_CACHE.get(label)
+    layer = _STICKER_CACHE.get(key)
     if layer is None:
         art = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         draw_art(ImageDraw.Draw(art))
         layer = _sticker_layer(art)
-        _STICKER_CACHE[label] = layer
+        _STICKER_CACHE[key] = layer
     img.paste(layer, (0, 0), layer)
     chip(d, label_xy, label, _font(24), anchor="ma", text_fill=INK)
 
@@ -311,7 +313,7 @@ def portrait_rosa(img, d, x, y, r=62):
                       fill=STICKER_INK)
         a.arc([x - 24, y + 12, x + 24, y + 48], 20, 160,
               fill=STICKER_INK, width=3)
-    _portrait_base(img, d, "Aunt Rosa", (x, y + 152), art)
+    _portrait_base(img, d, ("Aunt Rosa", x, y, r), "Aunt Rosa", (x, y + 152), art)
 
 
 def portrait_emil(img, d, x, y, r=62):
@@ -327,7 +329,7 @@ def portrait_emil(img, d, x, y, r=62):
         a.ellipse([x - 34, y + 16, x + 34, y + 40], fill=BROWNH)  # mustache
         a.arc([x - 20, y + 22, x + 22, y + 52], 20, 160,
               fill=(60, 45, 35), width=3)
-    _portrait_base(img, d, "Grandpa Emil", (x, y + 152), art)
+    _portrait_base(img, d, ("Grandpa Emil", x, y, r), "Grandpa Emil", (x, y + 152), art)
 
 
 def portrait_kid(img, d, x, y, r=56):
@@ -342,7 +344,8 @@ def portrait_kid(img, d, x, y, r=56):
                       fill=STICKER_INK)
         a.arc([x - 22, y + 14, x + 22, y + 46], 20, 160,
               fill=STICKER_INK, width=3)
-    _portrait_base(img, d, "you · interviewer", (x, y + 142), art)
+    _portrait_base(img, d, ("you · interviewer", x, y, r), "you · interviewer",
+                   (x, y + 142), art)
 
 
 def frame_title(img, d, f, p):

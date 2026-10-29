@@ -189,3 +189,18 @@ Recorded during setup. Each entry: decision + why.
 - Preview-first process held: stills approved in /tmp/v3prev_* before the
   full 2700-frame renders; one real bug caught that way (chrome always said
   "00 · INTRO" because the preview loop never passed the scene index).
+
+## 25. v4 video: Plex type, sticker portraits, layout chips, Samantha voiceover
+- Typography: vendored IBM Plex Sans variable font (demo/assets/fonts/,
+  OFL), Regular body + Bold (wght=700) titles; system-font fallback chain.
+- Stickers: portraits render to transparent layers, outlined via alpha
+  dilation (black outer ring, white ring, art on top); interior details stay
+  fixed dark ink so one sticker reads on both themes.
+- Post-ship catch: the sticker cache was keyed by label only, so talk-scene
+  portraits reused title-scene positions (chip floated alone). Fixed by
+  keying on (label, x, y, r); verified in fresh previews + shipped frames.
+- Voiceover: macOS `say -v Samantha`, 205 words fitted per scene (build
+  fails on overrun), muxed AAC; renderer self-gates (voice present in
+  `say -v '?'`, audio stream 90s, mean level sane).
+- Retouches deferred to next version: payoff numerals sit ~3px high;
+  graph edge passes behind the red-barn node (text unobscured).
