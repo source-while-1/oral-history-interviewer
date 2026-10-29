@@ -14,6 +14,12 @@
 </head>
 <body>
 <h1>Oral History Interviewer</h1>
+<div id="demo" hidden style="background:#fff3e0;border:1px solid #ff9800;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p><strong>Shared demo — fictional session, replay only.</strong></p>
+  <p id="demomsg"></p>
+  <p>Reconstruction demo login — name: <code id="demoname"></code> · invite code: <code id="democode"></code>
+  <button id="demofill">Fill in below</button></p>
+</div>
 <p>Session: <code id="sid"></code> · <a href="/how-it-works">How it works (50-second tour)</a></p>
 <p><label>Resume a session (optional): <input id="resume" placeholder="past session id" autocomplete="off"></label></p>
 <div id="q" aria-live="polite">Press “Start” to begin the interview.</div>
@@ -223,7 +229,11 @@ async function sendTurn(audioB64, transcript) {
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
     });
-    if (!res.ok) throw new Error("server error " + res.status);
+    if (!res.ok) {
+      let msg = "server error " + res.status;
+      try { const e = await res.json(); if (e && e.error) msg = e.error; } catch {}
+      throw new Error(msg);
+    }
     const data = await res.json();
     history.push({role: "assistant", text: data.question});
     (data.facts || []).forEach(f => facts.push(f));
@@ -436,6 +446,37 @@ document.getElementById("charstop").onclick = () => {
     "Stopped. We can pause or stop whenever you like — take whatever time you need.";
 };
 document.getElementById("charscope").value = sessionId;
+
+// Shared-demo mode: banner + published reconstruction login, interview
+// controls off (the server also blocks every write with a 403).
+(async function demoMode() {
+  let info = null;
+  try {
+    const r = await fetch("/api/demo-info");
+    info = await r.json();
+  } catch { return; }
+  if (!info || !info.demo_mode) return;
+  document.getElementById("demo").hidden = false;
+  document.getElementById("demomsg").textContent = info.message || "";
+  const ch = info.character || {};
+  document.getElementById("demoname").textContent = ch.requester || "";
+  document.getElementById("democode").textContent = ch.invite_code || "";
+  function fillDemoLogin() {
+    if (ch.session_id) {
+      document.getElementById("charscope").value = ch.session_id;
+      document.getElementById("askscopes").value = ch.session_id;
+    }
+    if (ch.requester) document.getElementById("charname").value = ch.requester;
+    if (ch.invite_code) document.getElementById("charcode").value = ch.invite_code;
+  }
+  fillDemoLogin();
+  document.getElementById("demofill").onclick = fillDemoLogin;
+  ["start", "talk", "finish"].forEach(id => { document.getElementById(id).disabled = true; });
+  document.getElementById("c-save").disabled = true;
+  document.getElementById("c-revoke").disabled = true;
+  q.textContent = "Shared demo: new interviews are disabled — replay the fictional session or ask the archive below.";
+  statusEl.textContent = "";
+})();
 
 (async function replayMode() {
   const sid = new URLSearchParams(location.search).get("session");

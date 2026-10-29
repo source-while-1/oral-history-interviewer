@@ -1,0 +1,48 @@
+#!/bin/bash
+# Share the fictional demo publicly (read-only) via a cloudflared tunnel.
+#
+# Starts the server with DEMO_MODE=1 (replay-only: no new interviews, no
+# consent writes, no recording) and MOCK_LLM=0 (real Fireworks answers over
+# the fictional demo session), bound to 127.0.0.1, then opens a
+# `cloudflared tunnel --url` to it and prints the public URL.
+# Both processes stop on Ctrl-C.
+#
+# Usage: ./scripts/share.sh [port]
+#   Needs FIREWORKS_API_KEY in the environment (or .env); the server reads
+#   it for the live ask/character calls. Never commit a key.
+set -euo pipefail
+
+PORT="${1:-${PORT:-8000}}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! command -v cloudflared >/dev/null 2>&1; then
+  echo "error: cloudflared is not installed." >&2
+  echo "Install it with: brew install cloudflared" >&2
+  exit 1
+fi
+if [ ! -f "$ROOT/server.py" ]; then
+  echo "error: run from the repo checkout (expected $ROOT/server.py)." >&2
+  exit 1
+fi
+
+export DEMO_MODE=1 MOCK_LLM=0 PORT
+echo "Starting replay-only demo server on http://127.0.0.1:$PORT ..."
+echo "(DEMO_MODE=1 MOCK_LLM=0 — fictional demo session only, writes blocked)"
+(cd "$ROOT" && python3 server.py) &
+SRV=$!
+cleanup() {
+  kill "$SRV" 2>/dev/null || true
+  wait "$SRV" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# Wait for the local server before opening the tunnel.
+for _ in $(seq 1 50); do
+  if curl -sf "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
+
+echo "Opening public tunnel (Ctrl-C stops the server and the tunnel) ..."
+exec cloudflared tunnel --url "http://localhost:$PORT"

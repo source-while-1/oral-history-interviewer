@@ -335,3 +335,162 @@ BOTH paths — MOCK-only is not a pass.
 5. Never cut: citation-per-claim, "I couldn't find that in the
    recordings.", consent gate + revoke/retire split,
    anti-hallucination eval set (MOCK + LIVE).
+
+## 10. Deployment (post-hackathon)
+
+SPEC ONLY — no code changes in this section. It constrains what a
+production deployment must add on top of what the repo does today.
+
+### 10.1 What the repo does today (ground truth)
+
+- Local single-process server (`server.py`, bound to `127.0.0.1`,
+  `PORT` from env): no accounts, no login, no per-user auth. Anyone
+  who can reach the server and guesses/knows a `session_id` can read
+  that session's facts/threads/clips/consent (public shape) today.
+- Storage is local disk only: `recordings/<session_id>/` holds wav
+  clips, `transcript.jsonl`, `facts.json`, `threads.json`, and
+  `consent.json` (gitignored; see [SPEC.md](../SPEC.md) § Local disk
+  storage: no cloud storage, no database server in v1).
+- Consent lives next to the session it governs: `consent.json`
+  carries `{ai_reconstruction, access, voice_clone, updated_at,
+  revoked}` plus Day-3 `access_list: [names]`,
+  `invite_codes: {name: sha256-hex}`, `retired`. Hashes use
+  `hash_invite_code()` (`sha256("character-invite-v1" \0 name \0
+  code)`); `public_consent()` strips hashes from API responses;
+  corrupt/missing files recover to blank. Revoke blanks wishes with
+  `revoked: true`; retire sets `retired: true` and keeps wishes.
+- Invite codes are per-person random strings issued by
+  `issue_invite_codes()` (stored hashed, shown once to the consenter,
+  never logged), checked server-side on every `POST /api/character`
+  by `check_character_access()` (default-deny). `DEMO_MODE=1` is the
+  one exception: the fictional demo session answers with a PUBLISHED
+  demo code (`DEMO_INVITE_CODE`, default `demo-invite-1958` for
+  `DEMO_CHARACTER_NAME`, default `demo-guest`) — safe only because
+  the demo archive is synthetic.
+- `DEMO_MODE=1` (set by `scripts/share.sh`) makes the server
+  replay-only: only fictional demo sessions (`DEMO_SESSIONS`,
+  default `demo-synthetic,demo-resumed`, plus any `demo-` id) are
+  served, every write to `recordings/` is blocked server-side (403),
+  unknown session ids 404.
+- Rate limiting is app-side and in-memory (single process):
+  `RATE_LIMIT_PER_IP_MAX` (default 120) per
+  `RATE_LIMIT_PER_IP_WINDOW_S` (default 3600s) sliding window plus a
+  global UTC-day cap `RATE_LIMIT_GLOBAL_DAY_MAX` (default 2000),
+  applying ONLY to LLM-backed routes (`/api/turn`, `/api/ask`,
+  `/api/character`); static pages and clip replay are unlimited.
+  Client identity honors `CF-Connecting-IP` because a cloudflared
+  tunnel collapses all peers to `127.0.0.1`. Limits reset on restart.
+- Sharing today is `scripts/share.sh`: local server +
+  `cloudflared tunnel --url http://localhost:$PORT`. TLS terminates
+  at Cloudflare's edge and inside the tunnel client; the local
+  server itself speaks plain HTTP on loopback. `FIREWORKS_API_KEY`
+  (server env / `.env`, never committed) is sent to the Fireworks
+  inference API on every live call (`MOCK_LLM=0`).
+
+### 10.2 Accounts / auth (must add)
+
+- v1 has no accounts: Day-3 per-person `(requester, invite_code)`
+  checks are session-scoped shared secrets, not identities. A
+  deployment MUST add one of: (a) proper user accounts (passwordless
+  email/magic-link or OAuth) bound to `access_list` entries, with
+  invite codes as one-time onboarding tokens that are rotated on
+  first use; or (b) a documented decision that link+code IS the
+  auth model, with brute-force protection on `/api/character`
+  (slow hash or attempt cap per name) — raw SHA-256 of a short code
+  is guessable and there is no per-name lockout today.
+- The published demo code path (`DEMO_INVITE_CODE` on screen) MUST
+  stay confined to `DEMO_MODE` synthetic sessions; it must never
+  gate, and must never share code with, a real family session.
+- Admin/family operations (un-retire, re-issue codes, any future
+  delete) need an authenticated role distinct from visitor codes.
+
+### 10.3 Persistent storage (must change)
+
+- Local `recordings/` does not survive redeploys, does not scale
+  past one process, and co-locates consent records with the media
+  they govern. A deployment MUST move to durable storage (managed
+  disk/volume plus off-site backup, or object storage for wavs +
+  a database for transcript/facts/threads/consent) with:
+  consent writes transactional against the session they govern;
+  revoke/retire effective immediately on every replica (read-your-
+  write for the consent gate); backups honoring revoke/delete
+  (tombstones propagated, restores must not resurrect withdrawn
+  consent); and an explicit retention/delete path — deletion is a
+  third action separate from revoke and retire (§2.2 rule 4).
+- Keep the corrupt-tolerant read pattern (unknown/corrupt recovers
+  to empty/blank → "I couldn't find that in the recordings.") only
+  for genuinely missing data, never as a mask for storage outages:
+  outages must fail closed (deny character/ask), not serve empty.
+
+### 10.4 Rate limiting (must harden)
+
+- Today's limiter is a single-process approximation of Fireworks
+  spend (requests as the unit; each request may fan out to several
+  LLM calls) with restart-volatile state. A multi-instance
+  deployment MUST share limiter state (e.g. Redis) or enforce caps
+  at the edge, keep the LLM-routes-only scope, and add the missing
+  pieces: per-name attempt caps on `/api/character` (invite-code
+  guessing), stricter caps on any future write/auth endpoints, and
+  alerting on global-day-cap approach (today the cap just returns
+  `RATE_LIMIT_MSG` with no signal).
+
+### 10.5 Hosting options
+
+- Option A (keep simple): single VM/container running `server.py`
+  behind TLS (or continued `cloudflared` tunnel), durable volume
+  for `recordings/`, process manager + log rotation. Matches the
+  current architecture; sufficient while one family at a time uses
+  it. Single point of failure; scale by going bigger, not wider.
+- Option B (scale out): stateless app instances behind a
+  load balancer + shared object storage/database (see §10.3) +
+  shared limiter state (see §10.4). Required before multi-family
+  or multi-instance serving; do not run two instances against one
+  local `recordings/` checkout.
+- Either way: `FIREWORKS_API_KEY` via a secret manager (never
+  `.env` on disk in production), `MOCK_LLM=0` only with a key
+  present, `DEMO_MODE=0` for real data, and separate demo vs.
+  family deployments so demo allowlists and published codes can
+  never overlap real sessions.
+
+### 10.6 TLS termination and third-party exposure
+
+- TLS terminates wherever the edge is: Cloudflare's edge under
+  `scripts/share.sh` today, the load balancer / ingress under
+  Option B. Termination means the terminator sees plaintext.
+- Concretely for the current path: **Cloudflare sees decrypted
+  traffic** — question text, answer text, citation slices, clip
+  audio bytes served via `GET /api/clip`, consent payloads, and
+  invite codes submitted to `/api/character` all pass through the
+  tunnel/edge in decryptable form. Fireworks likewise receives
+  every prompt slice (transcript segments, facts, questions) on
+  live calls. Browser STT (`Web Speech API`) already sends raw
+  speech audio to the browser vendor's speech service.
+- Consequences that must be disclosed and minimized: tell families
+  in plain language who can see/hear what (tunnel/CDN operator,
+  LLM provider, speech-to-text provider); do not log prompts,
+  transcripts, codes, or consent bodies at the edge or in the app;
+  keep `invite_codes` hashes server-side only (existing
+  `public_consent()` rule extends to all logs/backups); prefer
+  short edge-cache TTLs or no-cache on all `/api/*` and clip
+  routes; end-to-end encryption of archive content is explicitly
+  non-goal while server-side retrieval + LLM grounding needs
+  plaintext.
+
+### 10.7 Sensitive family / grief data and consent records
+
+- The archive concentrates the most sensitive family data: voice
+  prints (wav clips), verbatim grief/distress passages (flagged
+  `distress: true` in `transcript.jsonl`), inferred facts
+  (`facts.json`), and the consent record itself (`consent.json`
+  wishes + access list + code hashes + revoke/retire state).
+- Handling rules for any deployment: treat consent records as
+  sensitive as the recordings (same encryption, same access
+  controls, never in URLs or logs); honor revoke/retire
+  immediately across cache, replicas, and backups (§10.3);
+  default-deny on any consent ambiguity (consistent with
+  `check_character_access()`); keep the grief rules (§2.2 rule 6,
+  gentle tone, no initiation, offer to stop) in every new surface
+  including error and empty states; restrict operator access to
+  raw clips/transcripts (break-glass only, audited); and give the
+  family a visible path to review, export, and delete (delete
+  separate from revoke/retire) their data.
