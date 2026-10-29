@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works — Oral History Interviewer</title>
+<style>
+  :root { --ink: #14201c; --muted: #4b5563; --line: #d8dcd9; --accent: #0e6b5e; --panel: #f4f5f4; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink);
+         max-width: 860px; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.6rem; margin-bottom: 0; }
+  .sub { color: var(--muted); margin-top: .3rem; }
+  #stage { border: 1px solid var(--line); border-radius: 8px; padding: 1.5rem;
+           min-height: 340px; margin: 1rem 0; background: #fff; }
+  #bar { height: 6px; background: var(--panel); border-radius: 3px; overflow: hidden; }
+  #bar > div { height: 100%; width: 0; background: var(--accent); }
+  #cap { min-height: 3rem; color: var(--muted); }
+  .row { display: flex; gap: .6rem; margin: .6rem 0; align-items: center; }
+  .pill { border: 1px solid var(--line); border-radius: 20px; padding: .25rem .8rem; font-size: .9rem; }
+  .q { background: var(--panel); border-radius: 8px; padding: .8rem 1rem; font-size: 1.05rem; }
+  .chip { display: inline-block; border-radius: 4px; padding: .1rem .5rem; font-size: .85rem; margin: .15rem;
+          background: #e6f0ec; border: 1px solid var(--line); }
+  .mapdot { display: inline-flex; align-items: center; gap: .5rem; margin: .3rem .8rem .3rem 0; }
+  .dot { width: 34px; height: 34px; border-radius: 50%; background: #dcebe4;
+         display: inline-flex; align-items: center; justify-content: center; font-weight: 700; }
+  .playbar { height: 8px; background: var(--panel); border-radius: 4px; overflow: hidden; flex: 1; }
+  .playbar > div { height: 100%; width: 0; background: var(--accent); }
+  .lvl { display: inline-block; width: 8px; margin-right: 3px; background: var(--accent); vertical-align: bottom; }
+  button { font-size: .95rem; padding: .5rem 1rem; margin-right: .4rem; }
+  .fade { opacity: 0; transition: opacity .5s ease; }
+  .fade.on { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .fade { opacity: 1; transition: none; } }
+</style>
+</head>
+<body>
+<h1>How it works</h1>
+<p class="sub">A 50-second tour of one interview turn. All names are fictional.</p>
+<div id="bar"><div id="fill"></div></div>
+<div id="stage" aria-live="polite"></div>
+<p id="cap"></p>
+<div>
+  <button id="play">Pause</button>
+  <button id="prev">Back</button>
+  <button id="next">Next</button>
+  <button id="again">Replay</button>
+</div>
+<p><a href="/">Open the live app</a> · <a href="/demo/script.json">synthetic script</a></p>
+
+<script>
+const PEOPLE = [["Aunt Rosa", "AR"], ["Grandpa Emil", "GE"]];
+const scenes = [
+  { cap: "A voice interviewer for family stories. Push to talk, answer one question at a time.",
+    html: `<h2>One turn, end to end</h2>
+      <div class="row"><span class="pill">1 Talk</span><span>→</span><span class="pill">2 Think</span><span>→</span><span class="pill">3 Map</span><span>→</span><span class="pill">4 Replay</span></div>
+      <p>Every extracted fact cites the exact clip slice where it was said.</p>` },
+  { cap: "Hold to talk. The browser transcribes speech into timestamped segments.",
+    html: `<h2>1 · Talk</h2>
+      <div class="row" id="lvls">${"<span class='lvl' style='height:12px'></span>".repeat(2)}${"<span class='lvl' style='height:26px'></span>".repeat(2)}${"<span class='lvl' style='height:40px'></span>".repeat(2)}${"<span class='lvl' style='height:22px'></span>".repeat(2)}</div>
+      <p class="fade" data-t="600">“I grew up on a farm in Ohio with Aunt Rosa.”</p>
+      <p class="fade muted" data-t="1400" style="color:#4b5563">seg-0 · 0.0–3.5s · seg-1 · 3.5–6.0s</p>` },
+  { cap: "Fireworks makes two calls at once: the next warm question, and facts as JSON citing segment ids.",
+    html: `<h2>2 · Think</h2>
+      <div class="q fade" data-t="400">“What was your favorite memory with Aunt Rosa on the farm?”</div>
+      <p class="fade" data-t="1200"><span class="chip">person · Aunt Rosa · seg-0</span>
+      <span class="chip">place · farm in Ohio · seg-0</span>
+      <span class="chip">event · grew up on a farm · seg-0</span></p>` },
+  { cap: "Facts land on the timeline and the family map fills in.",
+    html: `<h2>3 · Map</h2>
+      <p class="fade" data-t="300">undated — grew up on a farm in Ohio [clip 0.0–3.5s]</p>
+      <div class="fade" data-t="1000">${PEOPLE.map(p => `<span class="mapdot"><span class="dot">${p[1]}</span>${p[0]}</span>`).join("")}</div>` },
+  { cap: "Click any fact to hear the exact moment it was said.",
+    html: `<h2>4 · Replay</h2>
+      <div class="row fade" data-t="300"><span>▶ person · Aunt Rosa</span><div class="playbar"><div id="pb"></div></div><span>0.0–3.5s</span></div>` },
+  { cap: "Run it offline with the synthetic demo, or live with a Fireworks key.",
+    html: `<h2>Try it</h2>
+      <p><code>python3 demo/replay.py</code> → open <code>/?session=demo-synthetic</code></p>
+      <p><code>MOCK_LLM=0 python3 server.py</code> with <code>FIREWORKS_API_KEY</code> set</p>` },
+];
+const stage = document.getElementById("stage"), cap = document.getElementById("cap"),
+      fill = document.getElementById("fill");
+let i = 0, timer = null, playing = true;
+function show(n) {
+  i = (n + scenes.length) % scenes.length;
+  stage.innerHTML = scenes[i].html;
+  cap.textContent = (i + 1) + "/" + scenes.length + " — " + scenes[i].cap;
+  fill.style.width = ((i + 1) / scenes.length * 100) + "%";
+  stage.querySelectorAll(".fade").forEach(el => {
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) { el.classList.add("on"); return; }
+    setTimeout(() => el.classList.add("on"), +(el.dataset.t || 0));
+  });
+  const pb = document.getElementById("pb");
+  if (pb) { let w = 0; const t = setInterval(() => { w += 4; pb.style.width = w + "%"; if (w >= 100) clearInterval(t); }, 120); }
+}
+function tick() { if (playing) show(i + 1); }
+function loop() { clearInterval(timer); timer = setInterval(tick, 6000); }
+document.getElementById("play").onclick = e => { playing = !playing; e.target.textContent = playing ? "Pause" : "Play"; loop(); };
+document.getElementById("prev").onclick = () => { show(i - 1); loop(); };
+document.getElementById("next").onclick = () => { show(i + 1); loop(); };
+document.getElementById("again").onclick = () => { show(0); loop(); };
+show(0); loop();
+</script>
+</body>
+</html>

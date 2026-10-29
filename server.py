@@ -369,6 +369,9 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             self._serve_file(ROOT / "index.html", "text/html; charset=utf-8")
+        elif parsed.path == "/how-it-works":
+            self._serve_file(ROOT / "demo" / "how-it-works.html",
+                             "text/html; charset=utf-8")
         elif parsed.path == "/api/facts":
             qs = parse_qs(parsed.query)
             session_id = "".join(

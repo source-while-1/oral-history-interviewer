@@ -124,3 +124,13 @@ Recorded during setup. Each entry: decision + why.
 ## 20. (j) replay() guards zero-length slices
 - Cause: `replay()` set `currentTime` past `end` with no guard and choked on
   `end<=start` (T7). Fix: early return with a "clip too short" status.
+
+## 21. Explainer: animated tour + rendered video (no new deps for the app)
+- Why: judges may not watch a full live interview; a 50-second tour and a
+  56s 720p video (`demo/demo.mp4`, 326KB) explain the loop with no setup.
+- `demo/how-it-works.html` served at `/how-it-works` (new server route);
+  auto-plays 6 scenes with play/back/next/replay and `prefers-reduced-motion`
+  support.
+- `demo/make_video.py` renders the same script with Pillow frames piped to
+  ffmpeg/libx264. Pillow lives only in the project `.venv` (optional tool);
+  server.py and all test suites stay stdlib-only.

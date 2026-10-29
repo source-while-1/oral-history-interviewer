@@ -75,6 +75,15 @@ python3 demo/replay.py
 or traversal-y ids); `/?session=<id>` loads any saved session read-only.
 Details in [demo/README.md](demo/README.md).
 
+## Explainer: animated tour + video
+
+- [`/how-it-works`](http://127.0.0.1:8000/how-it-works) — auto-playing
+  6-scene web tour of one turn (talk → think → map → replay), with
+  play/back/next/replay controls and `prefers-reduced-motion` support.
+- [`demo/demo.mp4`](demo/demo.mp4) — the same tour as a 56s 720p video,
+  rendered by [`demo/make_video.py`](demo/make_video.py) (Pillow frames →
+  ffmpeg/libx264; needs Pillow: `python3 -m venv .venv && .venv/bin/pip install pillow`).
+
 ## Demo tests
 
 ```sh
