@@ -620,12 +620,62 @@ def _probe_secs(path):
     return float(r.stdout.strip())
 
 
+VOICE = "Samantha"
+
+
+def _check_voice():
+    """Fail fast unless the named `say` voice is installed.
+
+    The muxed track is byte-deterministic `say -v Samantha` output for
+    the NARRATION text, so the "Samantha voiceover" claim rests on this
+    voice actually rendering (not a silent fallback).
+    """
+    r = subprocess.run(["say", "-v", "?"], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("make_video_v2: `say -v '?'` failed; cannot confirm voice")
+    if VOICE not in r.stdout.split():
+        sys.exit("make_video_v2: voice %r not installed; refusing silent "
+                 "fallback" % VOICE)
+
+
+def _mean_db(path):
+    r = subprocess.run(
+        ["ffmpeg", "-v", "info", "-i", str(path), "-map", "0:a",
+         "-af", "volumedetect", "-f", "null", "-"],
+        capture_output=True, text=True)
+    for line in r.stderr.splitlines():
+        if "mean_volume" in line:
+            return float(line.split("mean_volume:")[1].split("dB")[0])
+    sys.exit("make_video_v2: volumedetect failed on %s" % path)
+
+
+def verify_audio(path, expect_secs):
+    """Post-mux honesty gate: audio present, full-length, non-silent."""
+    r = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a",
+         "-show_entries", "stream=codec_name,duration",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip():
+        sys.exit("make_video_v2: no audio stream in %s" % path)
+    dur = float(r.stdout.strip().split(",")[-1])
+    if abs(dur - expect_secs) > 0.6:
+        sys.exit("make_video_v2: audio %.2fs != video %ds in %s"
+                 % (dur, expect_secs, path))
+    mean = _mean_db(path)
+    if mean < -40.0:
+        sys.exit("make_video_v2: audio silent (mean %.1f dB) in %s"
+                 % (mean, path))
+    print("audio check: %s %.2fs mean %.1f dB OK" % (path, dur, mean))
+
+
 def build_narration(tmpdir):
     """Render one padded/trimmed wav per scene with `say`, then concat.
 
     Returns (wav_path, [(scene, speech_secs, scene_secs, words)]).
     """
     tmpdir.mkdir(parents=True, exist_ok=True)
+    _check_voice()
     words_total = sum(len(v.split()) for v in NARRATION.values())
     print("narration: %d words total" % words_total)
     if not 180 <= words_total <= 220:
@@ -636,7 +686,7 @@ def build_narration(tmpdir):
     for name, secs in SCENES:
         aiff = tmpdir / ("%s.aiff" % name)
         out = tmpdir / ("%s.wav" % name)
-        _run(["say", "-v", "Samantha", "-o", str(aiff),
+        _run(["say", "-v", VOICE, "-o", str(aiff),
               "--file-format=AIFF", NARRATION[name]])
         speech = _probe_secs(aiff)
         _run(["ffmpeg", "-y", "-i", str(aiff),
@@ -734,6 +784,7 @@ def main():
     _run(["ffmpeg", "-y", "-i", str(silent), "-i", str(narration),
           "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
           "-shortest", str(args.out)])
+    verify_audio(args.out, sum(s for _, s in SCENES))
     print("wrote %s (video + Samantha voiceover)" % args.out)
 
 
