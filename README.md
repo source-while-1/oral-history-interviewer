@@ -8,7 +8,7 @@ timeline and family map.
 - Every fact cites `clip_id` + `start`/`end`.
 - Local disk storage only (`recordings/`). No Baseten, no Modal.
 
-See [SPEC.md](./SPEC.md) and [DECISIONS.md](./DECISIONS.md).
+See [SPEC.md](./SPEC.md), [DECISIONS.md](./DECISIONS.md), and [docs/SPEC-archive-character.md](./docs/SPEC-archive-character.md) (Day 2 archive Q&A + Day 3 character layer, spec only).
 
 ## Layout
 

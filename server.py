@@ -7,6 +7,9 @@ POST /api/turn  {session_id, audio_b64, history, transcript, segments,
 GET  /          serves index.html (single static frontend, no build step)
 GET  /api/facts?session_id=...  returns saved facts for a session
 GET  /api/threads?session_id=...  returns saved threads for a session
+GET  /api/consent?session_id=...  returns saved on-the-record consent
+POST /api/consent {session_id, ai_reconstruction, access, voice_clone} |
+  {session_id, revoke: true}  upserts or revokes it (carried on resume)
 
 Storage: recordings/<session>/<clip>.wav + transcript.jsonl (gitignored).
 LLM: Fireworks via OpenAI-compatible chat-completions endpoint. Two
@@ -14,6 +17,8 @@ concurrent calls per turn: (1) warm single-question follow-up (short
 max_tokens), (2) JSON-mode fact extraction
 {kind: person|place|event|relationship, text, when, segment_ids} plus a
 fatigue judgment {tired, reason} riding the same call (no added latency).
+When the judgment finds the speaker tired/distressed, a short gentle
+follow-up is generated after it (one extra call on tired turns only).
 Pause is model-judged on the real path, a length-only shortening proxy on
 the MOCK path, with the turn-count>=6 fallback on both; never keywords.
 segment_ids are mapped server-side to (clip_id, start, end) so every
@@ -121,6 +126,94 @@ def load_prior_word_counts(session_dir):
 def save_threads(session_dir, threads):
     Path(session_dir).mkdir(parents=True, exist_ok=True)
     Path(session_dir, "threads.json").write_text(json.dumps(threads or [], indent=2))
+
+
+# On-the-record consent (stored with the session, viewable + revocable).
+# Shape: {"ai_reconstruction": bool|None, "access": str,
+#         "voice_clone": bool|None, "updated_at": str, "revoked": bool}.
+# ai_reconstruction: OK with family later talking to an AI reconstruction
+#   built from their recordings. access: who may access it (free text,
+#   e.g. "family only"). voice_clone: separate yes/no for a cloned voice.
+CONSENT_PROMPT = (
+    "Before we pause — and only if you're comfortable — may I note your "
+    "wishes on the record? (1) Are you OK with family later talking to "
+    "an AI reconstruction built from your recordings? (2) Who may access "
+    "it — just immediate family, or a wider circle? (3) Separately, may "
+    "we use a cloned version of your voice for it — yes or no? Say as "
+    "much or as little as you like; you can change or withdraw any of "
+    "this at any time."
+)
+
+
+def blank_consent():
+    return {"ai_reconstruction": None, "access": "",
+            "voice_clone": None, "updated_at": "", "revoked": False}
+
+
+def load_consent(session_dir):
+    """Load persisted consent; corrupt/missing recovers to blank."""
+    path = Path(session_dir) / "consent.json"
+    if not path.exists():
+        return blank_consent()
+    try:
+        data = json.loads(path.read_text())
+    except (ValueError, OSError):
+        return blank_consent()
+    if not isinstance(data, dict):
+        return blank_consent()
+    out = blank_consent()
+    if data.get("ai_reconstruction") is True:
+        out["ai_reconstruction"] = True
+    elif data.get("ai_reconstruction") is False:
+        out["ai_reconstruction"] = False
+    access = data.get("access", "")
+    out["access"] = str(access or "")[:500]
+    if data.get("voice_clone") is True:
+        out["voice_clone"] = True
+    elif data.get("voice_clone") is False:
+        out["voice_clone"] = False
+    out["updated_at"] = str(data.get("updated_at", "") or "")
+    out["revoked"] = bool(data.get("revoked"))
+    return out
+
+
+def save_consent(session_dir, consent):
+    Path(session_dir).mkdir(parents=True, exist_ok=True)
+    Path(session_dir, "consent.json").write_text(
+        json.dumps(consent or blank_consent(), indent=2))
+
+
+def parse_consent_bool(value):
+    """Accept bools and gentle yes/no spellings; anything else is None."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in ("yes", "y", "true", "1", "allow", "ok", "okay"):
+        return True
+    if s in ("no", "n", "false", "0", "deny", "not"):
+        return False
+    return None
+
+
+def consent_complete(consent):
+    c = consent or {}
+    return (isinstance(c.get("ai_reconstruction"), bool)
+            and isinstance(c.get("access"), str) and c.get("access").strip() != ""
+            and isinstance(c.get("voice_clone"), bool))
+
+
+def consent_due(turn_count, suggested, consent):
+    """True once the interview is underway and pausing/ending is near.
+
+    Never on the opening turn (turn_count < 2); otherwise due while
+    consent is still incomplete and a pause was suggested or the session
+    is a few turns in (a gentle proxy for nearing a pause/session end).
+    """
+    if turn_count < 2 or consent_complete(consent):
+        return False
+    return bool(suggested) or turn_count >= 4
 
 
 def word_count(text):
@@ -394,7 +487,9 @@ def gen_followup(history, transcript_text, open_threads=None):
 
     Adaptive: when open loose-end threads remain, the prompt asks the model
     to prefer the most salient OPEN thread; with no open threads it asks a
-    fresh question.
+    fresh question. When the latest turn shows grief, distress, or a wish
+    to slow down, it must acknowledge briefly and offer space instead of
+    chasing a thread.
     """
     # Trimmed prompts: only the recent tail affects the next question, and
     # prompt (prefill) tokens are cheap next to generated tokens — but
@@ -416,12 +511,46 @@ def gen_followup(history, transcript_text, open_threads=None):
                 "You are a gentle oral-history interviewer. Ask ONE short "
                 "warm open-ended follow-up question (under 25 words). "
                 "Reply with the question text only, no JSON, no quotes."
+                " If the latest turn shows grief, distress, exhaustion, "
+                "or wanting to slow down or stop, do NOT pursue a loose "
+                "end or ask a content question: acknowledge briefly and "
+                "offer to pause, rest, or continue whenever ready."
                 + thread_hint
             ),
         },
         {
             "role": "user",
             "content": f"History: {history_tail}\nLatest turn: {transcript_text[-1000:]}",
+        },
+    ]
+    return _post_chat(messages, max_tokens=FOLLOWUP_MAX_TOKENS, temperature=0.6).strip()
+
+
+def gen_gentle_followup(transcript_text, reason=""):
+    """Sequential repair: a grief-sensitive follow-up written AFTER the
+    fatigue/emotion judgment (call 2) found the speaker tired/distressed.
+
+    Used only on tired turns: briefly acknowledges, asks no content or
+    thread question, and offers to pause, rest, or continue whenever the
+    speaker is ready. Short max_tokens like the regular follow-up.
+    """
+    cue = f" (their signal: {reason})" if (reason or "").strip() else ""
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are a gentle oral-history interviewer. The speaker "
+                "is tired, emotional, or wants to slow down. Reply with "
+                "ONE short warm response (under 25 words): briefly "
+                "acknowledge, ask NO content question, and offer to "
+                "pause or stop whenever they are ready (use the word "
+                "'pause' or 'stop'). "
+                "Plain text only, no JSON, no quotes."
+            ),
+        },
+        {
+            "role": "user",
+            "content": f"They just said: {transcript_text[-1000:]}" + cue,
         },
     ]
     return _post_chat(messages, max_tokens=FOLLOWUP_MAX_TOKENS, temperature=0.6).strip()
@@ -712,6 +841,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"facts": json.loads(facts_path.read_text())})
                 except (ValueError, OSError):
                     self._send_json({"facts": []})
+        elif parsed.path == "/api/consent":
+            qs = parse_qs(parsed.query)
+            session_id = "".join(
+                c for c in (qs.get("session_id") or [""])[0]
+                if c.isalnum() or c in "-_"
+            )
+            session_dir = (RECORDINGS / session_id) if session_id else None
+            if (
+                not session_dir
+                or RECORDINGS not in session_dir.resolve().parents
+                or not session_dir.is_dir()
+            ):
+                self._send_json({"consent": blank_consent()})
+            else:
+                # load_consent normalizes + recovers corrupt/missing to blank.
+                self._send_json({"consent": load_consent(session_dir)})
         elif parsed.path == "/api/threads":
             qs = parse_qs(parsed.query)
             session_id = "".join(
@@ -767,6 +912,43 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/api/consent":
+            length = int(self.headers.get("Content-Length", 0))
+            try:
+                payload = json.loads(self.rfile.read(length or 0).decode() or "{}")
+            except (ValueError, UnicodeDecodeError):
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+            session_id = sanitize_id(payload.get("session_id") or "default")
+            session_dir = RECORDINGS / session_id
+            consent = load_consent(session_dir)
+            if payload.get("revoke") is True:
+                consent = blank_consent()
+                consent["revoked"] = True
+                consent["updated_at"] = utcnow_iso()
+                save_consent(session_dir, consent)
+                self._send_json({"consent": consent})
+                return
+            changed = False
+            if "ai_reconstruction" in payload:
+                v = parse_consent_bool(payload.get("ai_reconstruction"))
+                if v is not None:
+                    consent["ai_reconstruction"] = v
+                    changed = True
+            if "access" in payload:
+                consent["access"] = str(payload.get("access") or "")[:500]
+                changed = True
+            if "voice_clone" in payload:
+                v = parse_consent_bool(payload.get("voice_clone"))
+                if v is not None:
+                    consent["voice_clone"] = v
+                    changed = True
+            if changed:
+                consent["revoked"] = False
+                consent["updated_at"] = utcnow_iso()
+                save_consent(session_dir, consent)
+            self._send_json({"consent": consent})
+            return
         if parsed.path != "/api/turn":
             self.send_response(404)
             self.end_headers()
@@ -816,6 +998,17 @@ class Handler(BaseHTTPRequestHandler):
                                 if t.get("status") == "open"]
                     if reopened:
                         save_threads(session_dir, reopened)
+                    src_consent_path = src_dir / "consent.json"
+                    if (src_consent_path.is_file()
+                            and not (session_dir / "consent.json").exists()):
+                        try:
+                            carried = load_consent(src_dir)
+                            if (carried.get("ai_reconstruction") is not None
+                                    or (carried.get("access") or "").strip()
+                                    or carried.get("voice_clone") is not None):
+                                save_consent(session_dir, carried)
+                        except OSError:
+                            pass
                     src_facts_path = src_dir / "facts.json"
                     if src_facts_path.is_file() and not (session_dir / "facts.json").exists():
                         try:
@@ -845,6 +1038,7 @@ class Handler(BaseHTTPRequestHandler):
         fallback = False
         llm_opened, llm_covered = [], []
         llm_tired = False
+        llm_tired_reason = ""
         # turn_count includes the turn being saved; prior word counts are
         # this session's answers so far (current turn not yet appended).
         try:
@@ -880,6 +1074,7 @@ class Handler(BaseHTTPRequestHandler):
                     fatigue_context)
                 facts = resolve_fact_links(raw_facts, clip_id, seg_by_id)
                 llm_tired = bool((fatigue or {}).get("tired"))
+                llm_tired_reason = str((fatigue or {}).get("reason", "") or "")
         except Exception as e:  # fall back to stub so the loop stays runnable
             question, facts = mock_llm_turn(history, transcript_text, segments,
                                             open_for_prompt)
@@ -899,6 +1094,18 @@ class Handler(BaseHTTPRequestHandler):
             )
             fallback_note = f"(llm fallback: {e})"
             fallback = True
+
+        # Grief-sensitive repair (real path only): when call 2 judged the
+        # speaker tired/distressed, the concurrent question may still chase
+        # a thread, so generate a gentle follow-up AFTER that judgment.
+        # Repair failure keeps the original question, never the fallback.
+        if not use_mock and not fallback and llm_tired:
+            try:
+                gentle = gen_gentle_followup(transcript_text, llm_tired_reason)
+                if gentle.strip():
+                    question = gentle
+            except Exception:
+                pass
 
         duration = clip_duration(clip_path)
         clamped = []
@@ -932,6 +1139,8 @@ class Handler(BaseHTTPRequestHandler):
         suggested = pause_suggested(
             turn_count, transcript_text, prior_word_counts,
             llm_tired=llm_tired)
+        consent = load_consent(session_dir)
+        due = consent_due(turn_count, suggested, consent)
 
         result = {
             "question": question or mock_llm_turn(
@@ -947,6 +1156,9 @@ class Handler(BaseHTTPRequestHandler):
             "threads_opened": threads_opened,
             "threads_covered": threads_covered,
             "pause_suggested": suggested,
+            "consent": consent,
+            "consent_due": due,
+            "consent_prompt": CONSENT_PROMPT if due else "",
         }
 
         # Append turn + persist facts.

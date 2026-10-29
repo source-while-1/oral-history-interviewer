@@ -8,6 +8,10 @@ terse speaker, descriptive 'exhausting', quoted 'I'm tired') must stay false
 on every turn. Also covers the turn-count>=6 fallback and empty-never-fires
 on the live path.
 
+Also covers grief-sensitive follow-ups: after an emotionally heavy turn
+the question must acknowledge and offer pause/stop/rest instead of
+thread-chasing, while calm turns stay normal content questions.
+
 Sessions are capped short enough that the turn-count fallback (>=6) cannot
 fire inside the pause/no-pause probes, and the MOCK shortening proxy cannot
 fire either (it needs >=3 priors and only runs meaningfully on the mock
@@ -178,6 +182,47 @@ def run_session(sid, texts, expect):
     return got
 
 
+# Grief-sensitive follow-ups: after an emotionally heavy turn the question
+# must acknowledge and offer pause/stop/rest (never thread-chase); before
+# the heavy turn it must stay a normal content question with no pause
+# offer. Repair runs only on tired turns, so normal-turn latency is
+# unchanged (heavy turns pay one extra short call, still far under 11s).
+GRIEF_Q_OFFER = ("paus", "stop")
+GRIEF_Q_CALM_T1 = ("paus", "stop")
+
+
+def grief_question_probe(tag):
+    """One grief session; return (sid, pauses, latencies, questions)."""
+    sid = f"fp-live-griefq-{tag}"
+    hist, pauses, dts, questions = [], [], [], []
+    for text in (GRIEF_T1, GRIEF_T2, GRIEF_T3):
+        t0 = time.time()
+        d = turn(sid, text, hist)
+        dts.append(time.time() - t0)
+        hist.append({"role": "user", "text": text})
+        pauses.append(d["pause_suggested"])
+        questions.append(d["question"])
+    return sid, pauses, dts, questions
+
+
+def check_grief_questions(tag):
+    """Pause pattern F,T,T plus: calm T1 stays a normal content question
+    (no pause/stop offer); heavy T2/T3 acknowledge and offer pause/stop."""
+    sid, pauses, dts, questions = grief_question_probe(tag)
+    assert pauses == [False, True, True], (sid, pauses)
+    q1 = (questions[0] or "").lower()
+    assert not any(w in q1 for w in GRIEF_Q_CALM_T1), (sid, questions[0])
+    for i in (1, 2):
+        q = (questions[i] or "").lower()
+        assert any(w in q for w in GRIEF_Q_OFFER), (sid, questions[i])
+    print(f"LIVE OK grief-sensitive follow-ups "
+          f"({', '.join(f'{dt:.2f}s' for dt in dts)}): "
+          f"T1 normal; T2/T3 offer pause/stop", flush=True)
+    for i, q in enumerate(questions):
+        print(f"  griefq T{i + 1}: {q!r}", flush=True)
+    return sid
+
+
 def main():
     key = os.environ.get("FIREWORKS_API_KEY", "")
     if not key:
@@ -214,6 +259,10 @@ def main():
                 assert run_session(sid, [GRIEF_T1, GRIEF_T2, GRIEF_T3],
                                    [False, True, True])
                 print(f"LIVE OK round {r + 1}: grief-quiet F,T,T", flush=True)
+            # Grief-sensitive follow-ups: heavy turns offer pause/stop,
+            # calm turns stay normal content questions.
+            if wanted("griefq"):
+                sids.append(check_grief_questions(f"{tag}"))
             # Expect-pause: explicit wrap-up after rich baselines.
             if wanted("wrap"):
                 sid = f"fp-live-wrap-{tag}"

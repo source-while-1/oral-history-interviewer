@@ -22,6 +22,15 @@
   <button id="keepgoing">Keep going</button>
   <button id="pausequit">Pause &amp; save</button>
 </div>
+<div id="consentbox" hidden style="background:#eef4ff;border:1px solid #93a5fd;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p id="consentprompt"></p>
+  <p><label>AI reconstruction OK? <select id="c-ai"><option value="">—</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+  <label>Who may access it? <input id="c-access" placeholder="e.g. immediate family only" autocomplete="off"></label>
+  <label>Cloned voice OK? <select id="c-voice"><option value="">—</option><option value="yes">Yes</option><option value="no">No</option></select></label></p>
+  <button id="c-save">Save wishes</button>
+  <button id="c-revoke">Withdraw</button>
+  <span id="c-status"></span>
+</div>
 <div id="resumecode" hidden style="background:#e8f5e9;border:1px solid #66bb6a;border-radius:8px;padding:1rem;margin:1rem 0;">
   <p>Session saved. Resume code: <code id="resumecodeval"></code>
   <button id="copycode">Copy</button></p>
@@ -118,6 +127,39 @@ function showPauseBanner(show) {
   document.getElementById("pause").hidden = !show;
 }
 
+function showConsentBox(data) {
+  const box = document.getElementById("consentbox");
+  if (!box) return;
+  if (data && data.consent_due && data.consent_prompt) {
+    box.hidden = false;
+    document.getElementById("consentprompt").textContent = data.consent_prompt;
+  } else if (data && data.consent) {
+    // Wishes already on record: keep the box available but quiet.
+    box.hidden = true;
+  }
+}
+
+async function postConsent(body) {
+  const el = document.getElementById("c-status");
+  try {
+    const res = await fetch("/api/consent", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(Object.assign({session_id: sessionId}, body))
+    });
+    if (!res.ok) throw new Error("server error " + res.status);
+    const data = await res.json();
+    if (el) el.textContent = data.consent && data.consent.revoked
+      ? "Wishes withdrawn."
+      : "Wishes saved — thank you. You can change them anytime.";
+    if (data.consent && data.consent.ai_reconstruction !== null
+        && data.consent.access && data.consent.voice_clone !== null)
+      document.getElementById("consentbox").hidden = true;
+  } catch (err) {
+    if (el) el.textContent = "Could not save: " + (err && err.message ? err.message : err);
+  }
+}
+
 function endSession(message) {
   showPauseBanner(false);
   speak("Thank you for sharing your story.");
@@ -170,6 +212,7 @@ async function sendTurn(audioB64, transcript) {
     renderFacts();
     renderThreads();
     showPauseBanner(!!data.pause_suggested);
+    showConsentBox(data);
     statusEl.textContent = data.fallback ? "Answered offline (fallback)." : "";
   } catch (err) {
     statusEl.textContent = "Could not reach the interviewer: " + (err && err.message ? err.message : err);
@@ -255,6 +298,13 @@ document.getElementById("copycode").onclick = async () => {
     statusEl.textContent = "Copy the selected resume code manually.";
   }
 };
+
+document.getElementById("c-save").onclick = () => postConsent({
+  ai_reconstruction: document.getElementById("c-ai").value || undefined,
+  access: document.getElementById("c-access").value || "",
+  voice_clone: document.getElementById("c-voice").value || undefined,
+});
+document.getElementById("c-revoke").onclick = () => postConsent({revoke: true});
 
 document.getElementById("finish").onclick = () => {
   endSession("Interview finished. Clips saved under recordings/" + sessionId + "/");
