@@ -62,6 +62,21 @@
   <ul id="askcites"></ul>
 </div>
 
+<h2>Talk with the reconstruction</h2>
+<div id="charbox" style="background:#faf5ff;border:1px solid #c4b5fd;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p id="charbanner" style="font-weight:bold;">AI reconstruction — built from recordings, not the person. Answers re-present the archive in the interviewee's own phrasing; every claim cites a playable recorded clip.</p>
+  <p><label>Session: <input id="charscope" autocomplete="off" style="min-width:12rem"></label>
+  <label>Your name: <input id="charname" autocomplete="off" placeholder="name on the invite"></label>
+  <label>Invite code: <input id="charcode" autocomplete="off" placeholder="per-person code"></label></p>
+  <p><label>Question: <input id="charq" autocomplete="off" style="min-width:24rem" placeholder="What did you love about the farm?"></label>
+  <button id="chargo">Ask</button>
+  <button id="charstop">Stop</button></p>
+  <div id="charanswer" aria-live="polite"></div>
+  <p id="charlabel" style="font-size:.9rem;color:#555;">AI reconstruction built from recordings — not the person.</p>
+  <ul id="charcites"></ul>
+  <p style="font-size:.9rem;color:#555;">Read-only: no recording here. If this feels like too much, press Stop anytime — we can pause or stop whenever you like.</p>
+</div>
+
 <script>
 const sessionId = "s-" + Date.now().toString(36);
 document.getElementById("sid").textContent = sessionId;
@@ -364,9 +379,68 @@ async function askArchive() {
 document.getElementById("askgo").onclick = askArchive;
 document.getElementById("askscopes").value = sessionId;
 
+// Day 3: "Talk with the reconstruction" — same citation player as Ask,
+// behind the per-person invite gate. Read-only: no recording UI here.
+// (Cloned voice is stretch-only and not shipped: answers use text plus
+// the real recorded clips; no voice option is rendered.)
+async function askCharacter() {
+  const sid = document.getElementById("charscope").value.trim();
+  const requester = document.getElementById("charname").value.trim();
+  const invite_code = document.getElementById("charcode").value.trim();
+  const question = document.getElementById("charq").value;
+  const ans = document.getElementById("charanswer");
+  const ul = document.getElementById("charcites");
+  ul.innerHTML = "";
+  ans.textContent = "Searching the recordings…";
+  try {
+    const res = await fetch("/api/character", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({session_ids: sid ? [sid] : [], question, requester, invite_code})
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      ans.textContent = res.status === 403
+        ? "This reconstruction is not available (consent withdrawn, retired, or invite not recognized)."
+        : (data.error || ("server error " + res.status));
+      return;
+    }
+    ans.textContent = data.answer_text || "";
+    document.getElementById("charlabel").textContent =
+      data.ai_label || "AI reconstruction built from recordings — not the person.";
+    (data.citations || []).forEach(c => {
+      const key = c.session_id + ":" + c.clip_id;
+      clips[key] = {
+        audioUrl: "/api/clip?session_id=" + encodeURIComponent(c.session_id)
+          + "&clip_id=" + encodeURIComponent(c.clip_id),
+        start: c.start, end: c.end
+      };
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.textContent = "▶ play cited clip";
+      b.title = "AI reconstruction — plays the recorded clip slice this answer cites";
+      b.onclick = () => replay(key);
+      li.textContent = `[${c.session_id} ${c.clip_id} ${c.start}-${c.end}s] `
+        + (c.quote || "").slice(0, 140) + " ";
+      li.appendChild(b);
+      ul.appendChild(li);
+    });
+  } catch (err) {
+    ans.textContent = "Could not reach the reconstruction: " + (err && err.message ? err.message : err);
+  }
+}
+document.getElementById("chargo").onclick = askCharacter;
+document.getElementById("charstop").onclick = () => {
+  try { speechSynthesis.cancel(); } catch {}
+  document.getElementById("charanswer").textContent =
+    "Stopped. We can pause or stop whenever you like — take whatever time you need.";
+};
+document.getElementById("charscope").value = sessionId;
+
 (async function replayMode() {
   const sid = new URLSearchParams(location.search).get("session");
   if (sid) {
+    document.getElementById("charscope").value = sid;
     document.getElementById("askscopes").value = sid;
     document.getElementById("askscope").textContent =
       "Asking session: " + sid + ". Answers quote the archive and cite playable clips.";
