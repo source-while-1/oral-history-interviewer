@@ -52,6 +52,16 @@
 <svg id="map" viewBox="0 0 700 220" role="img" aria-label="Family map"></svg>
 <ul id="people"></ul>
 
+<h2>Ask the archive</h2>
+<div id="askbox" style="background:#f4f4f5;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p id="askscope">Ask about the saved recordings. Answers quote the archive and cite playable clips.</p>
+  <p><label>Sessions to ask (comma-separated): <input id="askscopes" autocomplete="off" style="min-width:16rem"></label></p>
+  <p><label>Question: <input id="askq" autocomplete="off" style="min-width:24rem" placeholder="What did she say about the bakery?"></label>
+  <button id="askgo">Ask</button></p>
+  <div id="askanswer" aria-live="polite"></div>
+  <ul id="askcites"></ul>
+</div>
+
 <script>
 const sessionId = "s-" + Date.now().toString(36);
 document.getElementById("sid").textContent = sessionId;
@@ -313,8 +323,54 @@ document.getElementById("finish").onclick = () => {
 // Replay mode: ?session=<id> loads saved facts and streams clips from the
 // server, so a recorded (or synthetic) interview replays with audio and map.
 // Used by demo/replay.py: open /?session=demo-synthetic after a replay run.
+async function askArchive() {
+  const sids = document.getElementById("askscopes").value.split(",")
+    .map(s => s.trim()).filter(Boolean);
+  const question = document.getElementById("askq").value;
+  const ans = document.getElementById("askanswer");
+  const ul = document.getElementById("askcites");
+  ul.innerHTML = "";
+  ans.textContent = "Searching the recordings…";
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({session_ids: sids, question})
+    });
+    const data = await res.json();
+    if (!res.ok) { ans.textContent = data.error || ("server error " + res.status); return; }
+    ans.textContent = data.answer_text || "";
+    (data.citations || []).forEach(c => {
+      const key = c.session_id + ":" + c.clip_id;
+      clips[key] = {
+        audioUrl: "/api/clip?session_id=" + encodeURIComponent(c.session_id)
+          + "&clip_id=" + encodeURIComponent(c.clip_id),
+        start: c.start, end: c.end
+      };
+      const li = document.createElement("li");
+      const b = document.createElement("button");
+      b.textContent = "▶ play cited clip";
+      b.title = "Plays the recorded clip slice this answer cites";
+      b.onclick = () => replay(key);
+      li.textContent = `[${c.session_id} ${c.clip_id} ${c.start}-${c.end}s] `
+        + (c.quote || "").slice(0, 140) + " ";
+      li.appendChild(b);
+      ul.appendChild(li);
+    });
+  } catch (err) {
+    ans.textContent = "Could not ask the archive: " + (err && err.message ? err.message : err);
+  }
+}
+document.getElementById("askgo").onclick = askArchive;
+document.getElementById("askscopes").value = sessionId;
+
 (async function replayMode() {
   const sid = new URLSearchParams(location.search).get("session");
+  if (sid) {
+    document.getElementById("askscopes").value = sid;
+    document.getElementById("askscope").textContent =
+      "Asking session: " + sid + ". Answers quote the archive and cite playable clips.";
+  }
   if (!sid) return;
   document.getElementById("sid").textContent = sid + " (replay)";
   document.getElementById("start").disabled = true;
