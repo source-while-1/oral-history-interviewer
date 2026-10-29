@@ -1,0 +1,11 @@
+IBM Plex Sans — SIL Open Font License 1.1
+==============================================
+
+File: IBMPlexSans-Variable.ttf (wght axis)
+Source: https://github.com/google/fonts/tree/main/ofl/ibmplexsans
+Upstream design: IBM; Plex Sans is distributed under the SIL Open Font
+License, Version 1.1 (https://openfontlicense.org).
+
+Vendored here so demo/make_video_v2.py renders offline and reproducibly:
+Regular for body text, Bold (wght=700 variation) for titles and labels.
+Fallback chain when this file is absent: system fonts, then PIL default.

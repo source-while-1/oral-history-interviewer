@@ -84,11 +84,15 @@ Details in [demo/README.md](demo/README.md).
 - [`demo/demo.mp4`](demo/demo.mp4) — the same tour as a 56s 720p video,
   rendered by [`demo/make_video.py`](demo/make_video.py) (Pillow frames →
   ffmpeg/libx264; needs Pillow: `python3 -m venv .venv && .venv/bin/pip install pillow`).
+- v4 voiced: [`demo/demo_v4_light.mp4`](demo/demo_v4_light.mp4) and
+  [`demo/demo_v4_dark.mp4`](demo/demo_v4_dark.mp4) — the 90s story with
+  section chrome, vendored IBM Plex Sans, sticker portraits, and a
+  Samantha voiceover (AAC). Rendered by
+  [`demo/make_video_v2.py`](demo/make_video_v2.py)
+  (`.venv/bin/python demo/make_video_v2.py --theme light|dark`).
 - v3 restyle: [`demo/demo_v3_light.mp4`](demo/demo_v3_light.mp4) and
   [`demo/demo_v3_dark.mp4`](demo/demo_v3_dark.mp4) — the 90s v2 story with
-  section chrome (kickers, footer progress), light + dark themes.
-  Rendered by [`demo/make_video_v2.py`](demo/make_video_v2.py)
-  (`.venv/bin/python demo/make_video_v2.py --theme light|dark`).
+  section chrome (kickers, footer progress), light + dark themes (silent).
 - [`demo/demo_v2.mp4`](demo/demo_v2.mp4) — the full 3-turn story as a 90s
   720p30 video, rendered by [`demo/make_video_v2.py`](demo/make_video_v2.py)
   off the vendored [`demo/assets/basemap_ohio.png`](demo/assets/basemap_ohio.png)

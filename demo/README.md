@@ -32,6 +32,19 @@ Also in this folder:
   renders `demo_v3_light.mp4` / `demo_v3_dark.mp4` (section kickers, footer
   progress, dimmed basemap in dark). `--preview` writes one PNG per scene to
   `/tmp/v3prev_<theme>` for approval before the full render.
+- v4 (designed + voiced): same script renders `demo_v4_light.mp4` /
+  `demo_v4_dark.mp4` (90s, 720p30, h264 + AAC). New in v4: vendored
+  IBM Plex Sans (`assets/fonts/IBMPlexSans-Variable.ttf`, Regular body /
+  Bold titles via the wght axis; system fonts then PIL default as fallback;
+  OFL licensed — see below), sticker portraits (white ring + thin black
+  outer ring, fixed dark ink on both themes), chip-backed labels with 12px+
+  clearances, and a ~205-word Samantha voiceover (`say -v Samantha`, one
+  block per scene padded/trimmed to its scene, muxed AAC). `--preview`
+  writes to `/tmp/v4prev_<theme>`; `--no-audio` skips the voiceover.
+- Font license: IBM Plex Sans is © IBM and licensed under the SIL Open
+  Font License 1.1 (`assets/fonts/OFL.txt` source note; upstream:
+  https://github.com/google/fonts/tree/main/ofl/ibmplexsans). Keep the
+  vendored file committed so renders stay offline and reproducible.
 - `make_video_v2.py` → `demo_v2.mp4` — the full 3-turn story as a 90s
   720p30 video (title, talk, family graph, map, saved facts file, payoff,
   outro). Preview one frame per scene first:

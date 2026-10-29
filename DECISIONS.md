@@ -155,6 +155,31 @@ Recorded during setup. Each entry: decision + why.
   scenes are read from `demo/script.json` at render time (3 turns,
   6 segments, 6 rows), so the video cannot drift from the demo it depicts.
 
+## 24. v4 video: vendored Plex, sticker portraits, layout chips, voiceover
+- Type: vendored IBM Plex Sans (`demo/assets/fonts/IBMPlexSans-Variable.ttf`,
+  OFL; note in `demo/assets/fonts/OFL.txt` + `demo/README.md`) is the first
+  font source; system fonts then PIL default are fallbacks. Regular renders
+  body, the variable wght=700 axis renders titles/labels. Renderer and docs
+  never touch network at render time.
+- Portraits: each portrait draws to a transparent RGBA layer, then an
+  alpha-dilation composite outlines it (black mask largest, white ring
+  middle, art on top). Interiors stay fixed dark ink on both themes, so one
+  sticker reads on light and dark. Names moved to chips outside the sticker.
+- Layout: every label that sat on art got a chip (padded rounded rect);
+  clip markers moved above a capped waveform, graph nodes grew so kind
+  labels clear the edge, footer version label floats on a chip 14px above
+  the progress bar, map kicker uses light ink on the dark fiction banner,
+  km chips float clear of pins. Preview-first held (`/tmp/v4prev_*`,
+  viewed each still, two fix rounds: kicker contrast, km-chip clearance).
+- Voice: ~205 words, one block per scene, `say -v Samantha` per-scene AIFF,
+  `apad,atrim` to exact scene length, concat, mux AAC (`-c:v copy`). The
+  renderer prints per-scene speech-vs-scene durations and aborts on overrun —
+  it caught one live (title 8.42s > 8s; trimmed to 19 words). Graph is the
+  tightest fit (13.73s in 14s).
+- Outputs: `demo_v4_light.mp4` (2.43MB) + `demo_v4_dark.mp4` (2.32MB),
+  90s 720p30 h264 + AAC, ffprobe-verified. Sticker layers and fonts are
+  cached per render so 2700-frame themes stay fast.
+
 ## 23. v3 video restyle: light + dark themes with section chrome
 - Why: v2 was legible but bland (black on white, no sections). v3 adds a
   `THEMES` palette dict, per-scene kickers ("03 · MAP"), and a footer
