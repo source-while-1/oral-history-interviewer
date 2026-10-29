@@ -243,3 +243,19 @@ Recorded during setup. Each entry: decision + why.
   adaptivity with no key. Verified: turn 1 opens `th-aunt-rosa` and asks
   about her; turn 2 re-mentioning her covers the thread and falls back to
   the cycle; all three existing suites still pass unmodified.
+
+## 28. Threads panel + pause banner + resume box (frontend) and demo resume story
+- Why a separate `GET /api/threads`: `test_review.py` T1/T2 pin
+  `GET /api/facts` to return exactly `{"facts": []}` on traversal/corrupt,
+  so the replay page reads threads from a new endpoint with the same
+  confinement + corrupt-tolerant `[]` recovery instead of widening
+  `/api/facts`. Additive only; no existing suite touched.
+- Why resume code = session_id: the server already keys everything by
+  session dir, so the id IS the code — no token table, no lookup. The
+  "Resume a session" box sends it as `resume_from` on the first turn only
+  (the server ignores it afterwards anyway).
+- Why the demo's 4th turn is a tired cue with no names: it proves
+  `pause_suggested` without opening/covering anything, leaving Grandpa
+  Emil open so session 2 (`demo-resumed`, `resume_from=demo-synthetic`)
+  has something to carry over and cover. The console prints
+  threads_opened/covered + pause per turn as headless evidence.

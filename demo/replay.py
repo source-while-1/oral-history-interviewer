@@ -95,11 +95,40 @@ def main():
             for f in data["facts"]:
                 print(f"  [{f['kind']}] {f['text']} "
                       f"({f['clip_id']} {f['start']}-{f['end']}s)")
+            print(f"  threads_opened={data.get('threads_opened')} "
+                  f"threads_covered={data.get('threads_covered')} "
+                  f"pause_suggested={data.get('pause_suggested')}")
+            print(f"  threads={[(t['text'], t['status']) for t in data.get('threads', [])]}")
             history.append({"role": "user", "text": turn["transcript"]})
             history.append({"role": "assistant", "text": data["question"]})
 
+        # Session 2: the resume story. A new session id re-opens the first
+        # session's still-open threads via resume_from (typed into the
+        # "Resume a session" box in the UI; here it goes on the first turn).
+        resume_id = script.get("resume_session_id", "demo-resumed")
+        rturn = script.get("resume_turn")
+        if rturn:
+            segs = rturn["segments"]
+            status, rdata = post(base, "/api/turn", {
+                "session_id": resume_id,
+                "resume_from": session_id,
+                "audio_b64": silent_wav_b64(max(s["end"] for s in segs)),
+                "history": [],
+                "transcript": rturn["transcript"],
+                "segments": segs,
+            })
+            assert status == 200, rdata
+            print(f"--- resume session ({resume_id} <- {session_id}) ---")
+            print("YOU:", rturn["transcript"])
+            print("Q:  ", rdata["question"])
+            print(f"  threads_opened={rdata.get('threads_opened')} "
+                  f"threads_covered={rdata.get('threads_covered')} "
+                  f"pause_suggested={rdata.get('pause_suggested')}")
+            print(f"  threads={[(t['text'], t['status']) for t in rdata.get('threads', [])]}")
+
         print()
         print(f"Demo session ready: {base}/?session={session_id}")
+        print(f"Resume-story replay: {base}/?session={resume_id}")
         print("Press Ctrl-C to stop the server.")
         srv.wait()
     except KeyboardInterrupt:

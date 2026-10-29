@@ -34,6 +34,10 @@ citable timeline and family map.
   OPEN threads (+facts for the map) into the new session, so the opening
   question re-opens the oldest open thread. Unknown `resume_from` starts a
   normal fresh session (no error).
+- The UI renders an "Open threads" panel from `threads[].text` (+status)
+  on every turn, and the `?session=` replay page renders the saved list
+  via `GET /api/threads?session_id=...` (same confinement and
+  corrupt-tolerant `[]` recovery as `/api/facts`).
 
 ## Gentle pause
 - `POST /api/turn` returns `pause_suggested: bool`, true when the turn
@@ -41,6 +45,12 @@ citable timeline and family map.
   (case-insensitive substrings: "tired", "enough for today", "let's stop",
   "another time"). The UI phrases it gently; the interview never stops
   on its own.
+- When true, the UI shows a banner ("We've covered a lot — want to pause
+  and pick this up another time?") with [Keep going] (dismisses) and
+  [Pause & save] (ends the session and shows a resume code = the
+  `session_id`, with a Copy button). Typing that code into "Resume a
+  session" on the start screen sends it as `resume_from` on the first
+  turn.
 
 ## Push-to-talk turns
 - One turn = one press-and-hold utterance. No continuous listening, no

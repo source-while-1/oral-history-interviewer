@@ -17,7 +17,26 @@ Run it:
 ```bash
 python3 demo/replay.py
 # open http://127.0.0.1:8000/?session=demo-synthetic
+# resume story: http://127.0.0.1:8000/?session=demo-resumed
 ```
+
+The script is a 4-turn arc (still all-fictional): turn 1 introduces Aunt
+Rosa (opens thread `th-aunt-rosa`, next question asks about her), turn 2
+introduces Grandpa Emil (opens `th-grandpa-emil`), turn 3 re-mentions Aunt
+Rosa (covers `th-aunt-rosa`), and turn 4 says "I'm getting tired, let's
+stop for today" (no names; `pause_suggested` turns true via the tired cue
+while Grandpa Emil stays open). The console prints
+`threads_opened`/`threads_covered`/`pause_suggested` per turn so the
+open→covered arc and the pause nudge are visible without a browser.
+
+Session 2 (`demo-resumed`) is the resume story: its first turn sends
+`resume_from=demo-synthetic`, so the still-open Grandpa Emil thread is
+copied over and the opening question re-opens it; re-mentioning him
+covers it. Same mechanism as the UI's "Resume a session" box, which sends
+`resume_from` on the first turn. `GET /api/threads?session_id=...`
+returns the saved thread list (confined + corrupt-tolerant like
+`/api/facts`); the `?session=` replay page renders it under "Open
+threads" too.
 
 Also in this folder:
 

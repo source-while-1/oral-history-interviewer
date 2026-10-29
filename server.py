@@ -6,6 +6,7 @@ POST /api/turn  {session_id, audio_b64, history, transcript, segments,
       pause_suggested, fallback}
 GET  /          serves index.html (single static frontend, no build step)
 GET  /api/facts?session_id=...  returns saved facts for a session
+GET  /api/threads?session_id=...  returns saved threads for a session
 
 Storage: recordings/<session>/<clip>.wav + transcript.jsonl (gitignored).
 LLM: Fireworks via OpenAI-compatible chat-completions endpoint. Two
@@ -561,6 +562,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"facts": json.loads(facts_path.read_text())})
                 except (ValueError, OSError):
                     self._send_json({"facts": []})
+        elif parsed.path == "/api/threads":
+            qs = parse_qs(parsed.query)
+            session_id = "".join(
+                c for c in (qs.get("session_id") or [""])[0]
+                if c.isalnum() or c in "-_"
+            )
+            session_dir = (RECORDINGS / session_id) if session_id else None
+            if (
+                not session_dir
+                or RECORDINGS not in session_dir.resolve().parents
+                or not session_dir.is_dir()
+            ):
+                self._send_json({"threads": []})
+            else:
+                # load_threads normalizes + recovers corrupt/missing to [].
+                self._send_json({"threads": load_threads(session_dir)})
         elif parsed.path == "/api/clip":
             qs = parse_qs(parsed.query)
             session_id = "".join(

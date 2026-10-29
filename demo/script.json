@@ -22,6 +22,21 @@
         {"id": "seg-0", "text": "My proudest moment is the county fair pie prize Aunt Rosa won.", "start": 0.0, "end": 4.5},
         {"id": "seg-1", "text": "We still talk about it every winter.", "start": 4.5, "end": 7.0}
       ]
+    },
+    {
+      "transcript": "I'm getting tired, let's stop for today and pick this up another time.",
+      "segments": [
+        {"id": "seg-0", "text": "I'm getting tired, let's stop for today.", "start": 0.0, "end": 3.0},
+        {"id": "seg-1", "text": "and pick this up another time.", "start": 3.0, "end": 5.5}
+      ]
     }
-  ]
+  ],
+  "resume_session_id": "demo-resumed",
+  "resume_turn": {
+    "transcript": "Back again — Grandpa Emil taught us everything about the harvest, just like I said.",
+    "segments": [
+      {"id": "seg-0", "text": "Back again — Grandpa Emil taught us everything.", "start": 0.0, "end": 3.5},
+      {"id": "seg-1", "text": "about the harvest, just like I said.", "start": 3.5, "end": 6.0}
+    ]
+  }
 }

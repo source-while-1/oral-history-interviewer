@@ -15,13 +15,26 @@
 <body>
 <h1>Oral History Interviewer</h1>
 <p>Session: <code id="sid"></code> · <a href="/how-it-works">How it works (50-second tour)</a></p>
+<p><label>Resume a session (optional): <input id="resume" placeholder="past session id" autocomplete="off"></label></p>
 <div id="q" aria-live="polite">Press “Start” to begin the interview.</div>
+<div id="pause" hidden style="background:#fff8e1;border:1px solid #e6c200;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p>We've covered a lot — want to pause and pick this up another time?</p>
+  <button id="keepgoing">Keep going</button>
+  <button id="pausequit">Pause &amp; save</button>
+</div>
+<div id="resumecode" hidden style="background:#e8f5e9;border:1px solid #66bb6a;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p>Session saved. Resume code: <code id="resumecodeval"></code>
+  <button id="copycode">Copy</button></p>
+</div>
 <div>
   <button id="start">Start</button>
   <button id="talk" disabled>Hold to talk</button>
   <button id="finish" disabled>Finish</button>
 </div>
 <p id="status"></p>
+
+<h2>Open threads</h2>
+<ul id="threads"><li>No open threads yet.</li></ul>
 
 <h2>Timeline</h2>
 <ol id="timeline"></ol>
@@ -36,6 +49,8 @@ document.getElementById("sid").textContent = sessionId;
 let history = [];       // [{role, text}]
 let clips = {};         // clip_id -> {audioUrl, start, end}
 let facts = [];
+let threads = [];       // [{id, text, segment_id, status}]
+let firstTurn = true;
 let recorder = null, chunks = [], stream = null;
 
 const q = document.getElementById("q");
@@ -83,6 +98,35 @@ function renderFacts() {
   people.forEach(p => { const li = document.createElement("li"); li.textContent = p; ul.appendChild(li); });
 }
 
+function renderThreads() {
+  const ul = document.getElementById("threads");
+  ul.innerHTML = "";
+  if (!threads.length) {
+    const li = document.createElement("li");
+    li.textContent = "No open threads yet.";
+    ul.appendChild(li);
+    return;
+  }
+  threads.forEach(t => {
+    const li = document.createElement("li");
+    li.textContent = `${t.text} — ${t.status}`;
+    ul.appendChild(li);
+  });
+}
+
+function showPauseBanner(show) {
+  document.getElementById("pause").hidden = !show;
+}
+
+function endSession(message) {
+  showPauseBanner(false);
+  speak("Thank you for sharing your story.");
+  statusEl.textContent = message;
+  talkBtn.disabled = true;
+  document.getElementById("resumecodeval").textContent = sessionId;
+  document.getElementById("resumecode").hidden = false;
+}
+
 function replay(clipId) {
   const c = clips[clipId];
   if (!c || !c.audioUrl) { statusEl.textContent = "No audio saved for " + clipId; return; }
@@ -101,15 +145,22 @@ async function sendTurn(audioB64, transcript) {
     // without changing this schema (see README "STT upgrade path").
     const text = typeof transcript === "string" ? transcript : (lastTranscript || "");
     const segments = text ? [{id: "seg-0", text, start: 0, end: 0}] : [];
+    const body = {session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments};
+    if (firstTurn) {
+      const resumeFrom = (document.getElementById("resume").value || "").trim();
+      if (resumeFrom) body.resume_from = resumeFrom;
+      firstTurn = false;
+    }
     const res = await fetch("/api/turn", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments})
+      body: JSON.stringify(body)
     });
     if (!res.ok) throw new Error("server error " + res.status);
     const data = await res.json();
     history.push({role: "assistant", text: data.question});
     (data.facts || []).forEach(f => facts.push(f));
+    if (Array.isArray(data.threads)) threads = data.threads;
     // Remember latest clip blob for replay (server stores the .wav; browser keeps the slice).
     if (lastBlobUrl && data.facts) {
       data.facts.forEach(f => { if (f.clip_id) clips[f.clip_id] = {audioUrl: lastBlobUrl, start: f.start, end: f.end}; });
@@ -117,6 +168,8 @@ async function sendTurn(audioB64, transcript) {
     q.textContent = data.question + (data.fallback ? " (offline answer)" : "");
     speak(data.question);
     renderFacts();
+    renderThreads();
+    showPauseBanner(!!data.pause_suggested);
     statusEl.textContent = data.fallback ? "Answered offline (fallback)." : "";
   } catch (err) {
     statusEl.textContent = "Could not reach the interviewer: " + (err && err.message ? err.message : err);
@@ -185,10 +238,26 @@ talkBtn.onmouseup = talkBtn.ontouchend = async (e) => {
   await sendTurn(b64, lastTranscript);
 };
 
+document.getElementById("keepgoing").onclick = () => showPauseBanner(false);
+document.getElementById("pausequit").onclick = () =>
+  endSession("Interview paused. Clips saved under recordings/" + sessionId + "/");
+document.getElementById("copycode").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(sessionId);
+    statusEl.textContent = "Resume code copied.";
+  } catch {
+    // Clipboard API unavailable (permissions/insecure context): select instead.
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById("resumecodeval"));
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    statusEl.textContent = "Copy the selected resume code manually.";
+  }
+};
+
 document.getElementById("finish").onclick = () => {
-  speak("Thank you for sharing your story.");
-  statusEl.textContent = "Interview finished. Clips saved under recordings/" + sessionId + "/";
-  talkBtn.disabled = true;
+  endSession("Interview finished. Clips saved under recordings/" + sessionId + "/");
 };
 
 // Replay mode: ?session=<id> loads saved facts and streams clips from the
@@ -206,6 +275,11 @@ document.getElementById("finish").onclick = () => {
     const res = await fetch("/api/facts?session_id=" + encodeURIComponent(sid));
     const data = await res.json();
     facts = data.facts || [];
+    try {
+      const tres = await fetch("/api/threads?session_id=" + encodeURIComponent(sid));
+      const tdata = await tres.json();
+      if (Array.isArray(tdata.threads)) threads = tdata.threads;
+    } catch { /* threads stay empty; facts still replay */ }
     facts.forEach(f => {
       if (f.clip_id) clips[f.clip_id] = {
         audioUrl: "/api/clip?session_id=" + encodeURIComponent(sid)
@@ -216,6 +290,7 @@ document.getElementById("finish").onclick = () => {
     if (facts.length) q.textContent = "Replay of session " + sid + ". Click ▶ replay on any fact.";
     else q.textContent = "No saved facts for session " + sid + ".";
     renderFacts();
+    renderThreads();
   } catch { q.textContent = "Could not load replay for session " + sid + "."; }
   statusEl.textContent = "";
 })();
