@@ -5,23 +5,57 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Oral History Interviewer</title>
 <style>
-  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+  :root { color-scheme: light dark; }
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; line-height: 1.45; }
   #q { font-size: 1.2rem; background: #f4f4f5; padding: 1rem; border-radius: 8px; }
   button { font-size: 1rem; padding: .6rem 1rem; margin: .5rem .25rem; }
+  button.primary { font-weight: 700; font-size: 1.1rem; padding: .8rem 1.4rem; }
+  input, select { max-width: 100%; box-sizing: border-box; }
   #timeline li, #people li { margin: .4rem 0; }
   svg { border: 1px solid #ddd; border-radius: 8px; width: 100%; height: 220px; }
+  nav.modes { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
+  nav.modes button { flex: 1 1 10rem; border-radius: 10px; border: 2px solid #ccc; background: #fafafa; cursor: pointer; }
+  nav.modes button[aria-current="step"] { border-color: #4f46e5; background: #eef2ff; font-weight: 700; }
+  .step { border-top: 2px solid #eee; padding-top: 1rem; }
+  .hint { font-size: .95rem; color: #444; }
+  details { margin: .75rem 0; border: 1px solid #e2e2e2; border-radius: 8px; padding: .5rem .75rem; }
+  details summary { cursor: pointer; font-weight: 600; }
+  .tour { display: inline-block; margin: .25rem 0; }
+  input[type="text"], input:not([type]) { width: 100%; max-width: 26rem; }
+  #askq, #charq { width: 100%; max-width: 26rem; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #111; color: #eee; }
+    #q { background: #222; }
+    nav.modes button { background: #1c1c1c; border-color: #555; color: #eee; }
+    nav.modes button[aria-current="step"] { background: #2b3355; border-color: #93a5fd; }
+    details { border-color: #444; }
+    .hint, #charlabel { color: #bbb !important; }
+    svg { border-color: #444; }
+    #askbox { background: #1c1c1c !important; }
+    #charbox { background: #221d33 !important; }
+    a { color: #a5b4fc; }
+  }
 </style>
 </head>
 <body>
 <h1>Oral History Interviewer</h1>
+<p>Three steps, in order: <strong>1. Record a story</strong> → <strong>2. Ask the recordings</strong> → <strong>3. Talk with the AI reconstruction.</strong> Start at step 1.</p>
+<p><a class="tour" href="/how-it-works">How it works (50-second tour)</a></p>
+<nav class="modes" aria-label="Choose what to do">
+  <button id="mode-interview" aria-current="step">Step 1: Record a story</button>
+  <button id="mode-ask">Step 2: Ask the recordings</button>
+  <button id="mode-char">Step 3: Talk with the AI reconstruction</button>
+</nav>
 <div id="demo" hidden style="background:#fff3e0;border:1px solid #ff9800;border-radius:8px;padding:1rem;margin:1rem 0;">
   <p><strong>Shared demo — fictional session, replay only.</strong></p>
   <p id="demomsg"></p>
   <p>Reconstruction demo login — name: <code id="demoname"></code> · invite code: <code id="democode"></code>
   <button id="demofill">Fill in below</button></p>
 </div>
-<p>Session: <code id="sid"></code> · <a href="/how-it-works">How it works (50-second tour)</a></p>
-<p><label>Resume a session (optional): <input id="resume" placeholder="past session id" autocomplete="off"></label></p>
+
+<section id="step-interview" class="step" aria-label="Step 1: record a story">
+<h2>Step 1: Record a story</h2>
+<p class="hint">Press the button below, then answer out loud. One thing at a time — there is no wrong answer.</p>
 <div id="q" aria-live="polite">Press “Start” to begin the interview.</div>
 <div id="pause" hidden style="background:#fff8e1;border:1px solid #e6c200;border-radius:8px;padding:1rem;margin:1rem 0;">
   <p>We've covered a lot — want to pause and pick this up another time?</p>
@@ -42,46 +76,71 @@
   <button id="copycode">Copy</button></p>
 </div>
 <div>
-  <button id="start">Start</button>
+  <button id="start" class="primary">Start the interview</button>
   <button id="talk" disabled>Hold to talk</button>
   <button id="finish" disabled>Finish</button>
 </div>
+<p class="hint" id="talkhint">“Hold to talk”: press and hold the button while you speak, then let go. You will need to allow the microphone.</p>
 <p id="status"></p>
+<details>
+  <summary>Have a resume code? Continue a saved story</summary>
+  <p><label>Resume code from last time: <input id="resume" placeholder="paste your resume code here" autocomplete="off"></label></p>
+  <p class="hint">Enter the code above, then press “Start the interview”. Leave it empty to begin a new story.</p>
+  <p class="hint">This interview’s code: <code id="sid"></code></p>
+</details>
+<details id="learned">
+  <summary>What we’ve learned so far (follow-ups, timeline, family map)</summary>
+  <h2>Open threads</h2>
+  <ul id="threads"><li>No open threads yet.</li></ul>
+  <h2>Timeline</h2>
+  <ol id="timeline"></ol>
+  <h2>Family map</h2>
+  <svg id="map" viewBox="0 0 700 220" role="img" aria-label="Family map"></svg>
+  <ul id="people"></ul>
+</details>
+</section>
 
-<h2>Open threads</h2>
-<ul id="threads"><li>No open threads yet.</li></ul>
-
-<h2>Timeline</h2>
-<ol id="timeline"></ol>
-
-<h2>Family map</h2>
-<svg id="map" viewBox="0 0 700 220" role="img" aria-label="Family map"></svg>
-<ul id="people"></ul>
-
-<h2>Ask the archive</h2>
+<section id="step-ask" class="step" aria-label="Step 2: ask the recordings" hidden>
+<h2>Step 2: Ask the recordings</h2>
 <div id="askbox" style="background:#f4f4f5;border-radius:8px;padding:1rem;margin:1rem 0;">
-  <p id="askscope">Ask about the saved recordings. Answers quote the archive and cite playable clips.</p>
-  <p><label>Sessions to ask (comma-separated): <input id="askscopes" autocomplete="off" style="min-width:16rem"></label></p>
-  <p><label>Question: <input id="askq" autocomplete="off" style="min-width:24rem" placeholder="What did she say about the bakery?"></label>
-  <button id="askgo">Ask</button></p>
+  <p id="askscope">Ask the archive of saved recordings. Answers quote the archive and cite playable clips.</p>
+  <p><label>Your question: <input id="askq" autocomplete="off" placeholder="What did she say about the bakery?"></label>
+  <button id="askgo" class="primary">Ask</button></p>
   <div id="askanswer" aria-live="polite"></div>
-  <ul id="askcites"></ul>
+  <details open>
+    <summary>Hear the proof (playable clips behind this answer)</summary>
+    <ul id="askcites"></ul>
+  </details>
+  <details>
+    <summary>Which recordings? (usually filled in for you)</summary>
+    <p><label>Recordings to search: <input id="askscopes" autocomplete="off"></label></p>
+  </details>
 </div>
+</section>
 
-<h2>Talk with the reconstruction</h2>
+<section id="step-char" class="step" aria-label="Step 3: talk with the AI reconstruction" hidden>
+<h2>Step 3: Talk with the AI reconstruction</h2>
 <div id="charbox" style="background:#faf5ff;border:1px solid #c4b5fd;border-radius:8px;padding:1rem;margin:1rem 0;">
   <p id="charbanner" style="font-weight:bold;">AI reconstruction — built from recordings, not the person. Answers re-present the archive in the interviewee's own phrasing; every claim cites a playable recorded clip.</p>
-  <p><label>Session: <input id="charscope" autocomplete="off" style="min-width:12rem"></label>
-  <label>Your name: <input id="charname" autocomplete="off" placeholder="name on the invite"></label>
-  <label>Invite code: <input id="charcode" autocomplete="off" placeholder="per-person code"></label></p>
-  <p><label>Question: <input id="charq" autocomplete="off" style="min-width:24rem" placeholder="What did you love about the farm?"></label>
-  <button id="chargo">Ask</button>
+  <p><label>Your question: <input id="charq" autocomplete="off" placeholder="What did you love about the farm?"></label>
+  <button id="chargo" class="primary">Ask the reconstruction</button>
   <button id="charstop">Stop</button></p>
   <div id="charanswer" aria-live="polite"></div>
   <p id="charlabel" style="font-size:.9rem;color:#555;">AI reconstruction built from recordings — not the person.</p>
-  <ul id="charcites"></ul>
+  <details open>
+    <summary>Hear the proof (playable clips behind this answer)</summary>
+    <ul id="charcites"></ul>
+  </details>
   <p style="font-size:.9rem;color:#555;">Read-only: no recording here. If this feels like too much, press Stop anytime — we can pause or stop whenever you like.</p>
+  <details>
+    <summary>Who may enter (name and invite code)</summary>
+    <p><label>Which recording: <input id="charscope" autocomplete="off"></label></p>
+    <p><label>Your name: <input id="charname" autocomplete="off" placeholder="name on the invite"></label>
+    <label>Invite code: <input id="charcode" autocomplete="off" placeholder="per-person code"></label></p>
+    <p class="hint">Only people the family invited can enter. Each person gets their own code. Without a code, this step stays closed — that protects the family.</p>
+  </details>
 </div>
+</section>
 
 <script>
 const sessionId = "s-" + Date.now().toString(36);
@@ -344,6 +403,32 @@ document.getElementById("c-revoke").onclick = () => postConsent({revoke: true});
 document.getElementById("finish").onclick = () => {
   endSession("Interview finished. Clips saved under recordings/" + sessionId + "/");
 };
+
+// One clear path: three modes, one visible step at a time.
+// All panels and API calls stay; only visibility changes.
+(function modes() {
+  const steps = {
+    interview: document.getElementById("step-interview"),
+    ask: document.getElementById("step-ask"),
+    char: document.getElementById("step-char")
+  };
+  const btns = {
+    interview: document.getElementById("mode-interview"),
+    ask: document.getElementById("mode-ask"),
+    char: document.getElementById("mode-char")
+  };
+  function show(name) {
+    Object.entries(steps).forEach(([k, el]) => { if (el) el.hidden = (k !== name); });
+    Object.entries(btns).forEach(([k, b]) => {
+      if (!b) return;
+      if (k === name) b.setAttribute("aria-current", "step");
+      else b.removeAttribute("aria-current");
+    });
+  }
+  btns.interview.onclick = () => show("interview");
+  btns.ask.onclick = () => show("ask");
+  btns.char.onclick = () => show("char");
+})();
 
 // Replay mode: ?session=<id> loads saved facts and streams clips from the
 // server, so a recorded (or synthetic) interview replays with audio and map.
