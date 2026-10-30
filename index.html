@@ -135,6 +135,8 @@
   <details>
     <summary>Which recordings? (usually filled in for you)</summary>
     <p><label>Recordings to search: <input id="askscopes" autocomplete="off"></label></p>
+    <p><label>Or relatives to ask (personal ids, comma-separated): <input id="askpersons" autocomplete="off" placeholder="p-…, p-…"></label>
+    <span class="hint">Ask-the-family: searches every consenting relative listed; anyone who withdrew stays out silently.</span></p>
   </details>
 </div>
 </section>
@@ -153,6 +155,8 @@
     <ul id="charcites"></ul>
   </details>
   <p style="font-size:.9rem;color:#555;">Read-only: no recording here. If this feels like too much, press Stop anytime — we can pause or stop whenever you like.</p>
+  <p><label>Or talk with one relative (personal id): <input id="charperson" autocomplete="off" placeholder="p-…"></label>
+  <span class="hint">One relative at a time; uses that relative's own consent and invite. Takes the place of "Which recording" above.</span></p>
   <details>
     <summary>Who may enter (name and invite code)</summary>
     <p><label>Which recording: <input id="charscope" autocomplete="off"></label></p>
@@ -160,6 +164,16 @@
     <label>Invite code: <input id="charcode" autocomplete="off" placeholder="per-person code"></label></p>
     <p class="hint">Only people the family invited can enter. Each person gets their own code. Without a code, this step stays closed — that protects the family.</p>
   </details>
+</div>
+</section>
+
+<section id="step-family" aria-label="Family archive across relatives">
+<h2>Family archive</h2>
+<div style="background:#f4f4f5;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p id="famscope">One shared archive across everyone who recorded: the same person or place mentioned by several relatives becomes one entry, with each relative's own cited clip. Agreements show who else mentions it; disagreements stay side-by-side — never merged.</p>
+  <p><label>Relatives (personal ids, comma-separated): <input id="fampersons" autocomplete="off" placeholder="p-…, p-…"></label>
+  <button id="famload" class="primary">Show the family archive</button></p>
+  <div id="family-entities" aria-live="polite"></div>
 </div>
 </section>
 
@@ -575,16 +589,21 @@ if (tLeave) tLeave.onclick = async () => {
 async function askArchive() {
   const sids = document.getElementById("askscopes").value.split(",")
     .map(s => s.trim()).filter(Boolean);
+  const pidsEl = document.getElementById("askpersons");
+  const pids = pidsEl ? pidsEl.value.split(",").map(s => s.trim()).filter(Boolean) : [];
   const question = document.getElementById("askq").value;
   const ans = document.getElementById("askanswer");
   const ul = document.getElementById("askcites");
   ul.innerHTML = "";
   ans.textContent = "Searching the recordings…";
   try {
+    const askBody = pids.length ? {person_ids: pids, question}
+      : {session_ids: sids, question};
+    if (pids.length && sids.length) askBody.session_ids = sids;
     const res = await fetch("/api/ask", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({session_ids: sids, question})
+      body: JSON.stringify(askBody)
     });
     const data = await res.json();
     if (!res.ok) { ans.textContent = data.error || ("server error " + res.status); return; }
@@ -623,6 +642,8 @@ document.getElementById("askscopes").value = sessionId;
 // the real recorded clips; no voice option is rendered.)
 async function askCharacter() {
   const sid = document.getElementById("charscope").value.trim();
+  const relEl = document.getElementById("charperson");
+  const rel = relEl ? relEl.value.trim() : "";
   const requester = document.getElementById("charname").value.trim();
   const invite_code = document.getElementById("charcode").value.trim();
   const question = document.getElementById("charq").value;
@@ -630,11 +651,15 @@ async function askCharacter() {
   const ul = document.getElementById("charcites");
   ul.innerHTML = "";
   ans.textContent = "Searching the recordings…";
+  // Talk-with-a-relative: one relative at a time under their own consent.
+  const charBody = rel
+    ? {person_id: rel, question, requester, invite_code}
+    : {session_ids: sid ? [sid] : [], question, requester, invite_code};
   try {
     const res = await fetch("/api/character", {
       method: "POST",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({session_ids: sid ? [sid] : [], question, requester, invite_code})
+      body: JSON.stringify(charBody)
     });
     const data = await res.json();
     if (!res.ok) {
@@ -672,6 +697,93 @@ async function askCharacter() {
   }
 }
 document.getElementById("chargo").onclick = askCharacter;
+
+// Phase 3: family archive across relatives — one entity per normalized
+// name, each relative's own cited clip, corroboration badges, and
+// disagreements side-by-side (never merged). Clips reuse the player above.
+function famPlayButton(c) {
+  const key = c.session_id + ":" + c.clip_id;
+  clips[key] = {
+    audioUrl: "/api/clip?session_id=" + encodeURIComponent(c.session_id)
+      + "&clip_id=" + encodeURIComponent(c.clip_id),
+    start: c.start, end: c.end
+  };
+  const b = document.createElement("button");
+  b.textContent = "▶ play cited clip";
+  b.title = "Plays the recorded clip slice this mention cites";
+  b.onclick = () => replay(key);
+  return b;
+}
+function famMentionLine(m, who) {
+  const li = document.createElement("li");
+  li.textContent = `${who}: "${(m.quote || "").slice(0, 140)}"` +
+    (m.when ? ` (${m.when})` : " (no date given)") +
+    ` [${m.session_id} ${m.clip_id} ${m.start}-${m.end}s] `;
+  li.appendChild(famPlayButton(m));
+  return li;
+}
+async function loadFamilyArchive() {
+  const box = document.getElementById("family-entities");
+  const pids = document.getElementById("fampersons").value.split(",")
+    .map(s => s.trim()).filter(Boolean);
+  box.innerHTML = "";
+  if (!pids.length) {
+    box.textContent = "Enter the personal ids of the relatives to gather.";
+    return;
+  }
+  box.textContent = "Gathering the family archive…";
+  try {
+    const qs = pids.map(p => "person_ids=" + encodeURIComponent(p)).join("&");
+    const res = await fetch("/api/family-entities?" + qs);
+    const data = await res.json();
+    box.innerHTML = "";
+    if (!res.ok) { box.textContent = data.error || ("server error " + res.status); return; }
+    const whoName = {};
+    (data.persons || []).forEach(p => { whoName[p.person_id] = p.display_name || p.person_id; });
+    if (!(data.entities || []).length) {
+      box.textContent = "No shared people or places found for these relatives yet.";
+      return;
+    }
+    const ul = document.createElement("ul");
+    (data.entities || []).forEach(e => {
+      const item = document.createElement("li");
+      const head = document.createElement("strong");
+      head.textContent = `${e.name} (${e.kind})`;
+      item.appendChild(head);
+      if (e.corroborated) {
+        const badge = document.createElement("p");
+        badge.textContent = "Both mention this: " + (e.corroborated_by || []).join(", ");
+        item.appendChild(badge);
+      }
+      if ((e.disagreements || []).length) {
+        const note = document.createElement("p");
+        note.textContent = "The accounts differ — shown side-by-side, never merged:";
+        item.appendChild(note);
+        (e.disagreements || []).forEach(d => {
+          const side = document.createElement("div");
+          const h = document.createElement("strong");
+          h.textContent = `Account: ${d.when}`;
+          side.appendChild(h);
+          const ml = document.createElement("ul");
+          (d.mentions || []).forEach(m =>
+            ml.appendChild(famMentionLine(m, whoName[m.person_id] || m.person_id)));
+          side.appendChild(ml);
+          item.appendChild(side);
+        });
+      } else {
+        const ml = document.createElement("ul");
+        (e.mentions || []).forEach(m =>
+          ml.appendChild(famMentionLine(m, whoName[m.person_id] || m.person_id)));
+        item.appendChild(ml);
+      }
+      ul.appendChild(item);
+    });
+    box.appendChild(ul);
+  } catch (err) {
+    box.textContent = "Could not gather the archive: " + (err && err.message ? err.message : err);
+  }
+}
+document.getElementById("famload").onclick = loadFamilyArchive;
 document.getElementById("charstop").onclick = () => {
   try { speechSynthesis.cancel(); } catch {}
   document.getElementById("charanswer").textContent =

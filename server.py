@@ -435,6 +435,211 @@ def save_next_topics(person_id, topics):
         pass
 
 
+# ---------------------------------------------------------------------------
+# Generational model, Phase 3: family archive across people. Sessions stay
+# per-person (citation invariant unchanged); this DERIVED index groups
+# normalized people/place names across relatives WITHOUT merging: every
+# mention keeps its own per-relative cited clip. Corroboration (same
+# entity cited by >=2 consenting relatives) shows as a badge; conflicting
+# cited accounts (different whens/details) show side-by-side with
+# per-relative citations — never merged into one canonical fact.
+
+
+def session_person_id(session_id):
+    """Person a session belongs to ('' when unbound/unknown/corrupt)."""
+    sdir = RECORDINGS / sanitize_id(session_id or "", default="")
+    try:
+        data = json.loads((sdir / "person.json").read_text())
+    except (ValueError, OSError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    pid = sanitize_id(data.get("person_id") or "", default="")
+    return pid if load_person(pid) is not None else ""
+
+
+def person_archive_allowed(person_id):
+    """True when a person's archive answers may show (unrevoked).
+
+    Retire disables only the character; Day-2 archive answers, entities,
+    and the map keep serving unless consent is revoked.
+    """
+    pid = sanitize_id(person_id or "", default="")
+    if load_person(pid) is None:
+        return False
+    return not load_person_consent(pid).get("revoked")
+
+
+def session_archive_blocked(session_id):
+    """True when a session's archive answers must stay dark (revoked).
+
+    Either the session's own consent or its bound person's consent being
+    revoked blocks reuse — never leak across scope.
+    """
+    sid = sanitize_id(session_id or "", default="")
+    sdir = RECORDINGS / sid
+    try:
+        if load_consent(sdir).get("revoked"):
+            return True
+    except OSError:
+        pass
+    pid = session_person_id(sid)
+    return bool(pid) and not person_archive_allowed(pid)
+
+
+def all_person_ids():
+    """Every known person id, sorted (corrupt-tolerant)."""
+    try:
+        dirs = sorted((d for d in people_dir().iterdir() if d.is_dir()),
+                      key=lambda d: d.name)
+    except OSError:
+        return []
+    out = []
+    for d in dirs:
+        if load_person(d.name) is not None:
+            out.append(d.name)
+    return out
+
+
+def person_scope_sessions(person_ids):
+    """Resolve person ids to their existing, archive-allowed session ids.
+
+    Unknown persons, revoked persons, revoked sessions, and missing
+    session dirs are silently dropped (never leak across scope).
+    """
+    out = []
+    for raw in person_ids or []:
+        pid = sanitize_id(raw or "", default="")
+        if not pid or not person_archive_allowed(pid):
+            continue
+        for sid in load_person_sessions(pid):
+            sid = sanitize_id(sid, default="")
+            if not sid or sid in out:
+                continue
+            sdir = RECORDINGS / sid
+            try:
+                ok = sdir.is_dir() and RECORDINGS in sdir.resolve().parents
+            except OSError:
+                ok = False
+            if ok and not session_archive_blocked(sid):
+                out.append(sid)
+    return out
+
+
+def normalize_entity_name(text):
+    """Group key for cross-person entities: lowercase, collapsed spaces."""
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def collect_family_entities(person_ids):
+    """Derived cross-person entity index (people/places, never merged).
+
+    Returns (entities, persons): entities is
+    [{name, normalized, kind, mentions: [{person_id, session_id, clip_id,
+    start, end, quote, when}], corroborated, corroborated_by: [names],
+    whens: [distinct non-empty], disagreements: [{when, mentions}]}].
+    Only unrevoked persons/sessions contribute; disagreements list each
+    cited account side-by-side with per-relative citations.
+    """
+    wanted = []
+    for raw in person_ids or []:
+        pid = sanitize_id(raw or "", default="")
+        if pid and pid not in wanted and person_archive_allowed(pid):
+            wanted.append(pid)
+    names = {}
+    for pid in wanted:
+        person = load_person(pid)
+        names[pid] = str((person or {}).get("display_name", "") or pid)
+    grouped = {}
+    for pid in wanted:
+        for sid in load_person_sessions(pid):
+            sid = sanitize_id(sid, default="")
+            if not sid:
+                continue
+            sdir = RECORDINGS / sid
+            try:
+                ok = (sdir.is_dir()
+                      and RECORDINGS in sdir.resolve().parents)
+            except OSError:
+                continue
+            if not ok or session_archive_blocked(sid):
+                continue
+            try:
+                facts = json.loads((sdir / "facts.json").read_text())
+            except (ValueError, OSError):
+                continue
+            if not isinstance(facts, list):
+                continue
+            for f in facts:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("kind") not in ("person", "place"):
+                    continue
+                text = str(f.get("text", "") or "").strip()
+                if not text or is_instruction_like(text):
+                    continue
+                key = normalize_entity_name(text)
+                if not key:
+                    continue
+                clip_id = str(f.get("clip_id", "") or "")
+                duration = clip_duration(
+                    sdir / (clip_id + ".wav")) if clip_id else None
+                if duration is None:
+                    continue
+                try:
+                    s = float(f.get("start", 0.0))
+                    e = float(f.get("end", 0.0))
+                except (TypeError, ValueError):
+                    continue
+                s, e = clamp_fact_range(s, e, duration)
+                if not e > s:
+                    continue
+                entry = grouped.setdefault(key, {
+                    "name": text, "normalized": key,
+                    "kind": str(f.get("kind", "")),
+                    "mentions": [],
+                })
+                entry["mentions"].append({
+                    "person_id": pid,
+                    "session_id": sid,
+                    "clip_id": clip_id,
+                    "start": s, "end": e,
+                    "quote": text,
+                    "when": str(f.get("when", "") or ""),
+                })
+    entities = []
+    for key in sorted(grouped):
+        entry = grouped[key]
+        by_person = sorted({m["person_id"] for m in entry["mentions"]})
+        whens = []
+        for m in entry["mentions"]:
+            if m["when"] and m["when"] not in whens:
+                whens.append(m["when"])
+        disagreements = []
+        if len(whens) >= 2:
+            # Side-by-side cited accounts, never merged or auto-corrected.
+            disagreements = [
+                {"when": w,
+                 "mentions": [m for m in entry["mentions"]
+                              if m["when"] == w]}
+                for w in whens
+            ]
+        entities.append({
+            "name": entry["name"],
+            "normalized": entry["normalized"],
+            "kind": entry["kind"],
+            "mentions": entry["mentions"],
+            "corroborated": len(by_person) >= 2,
+            "corroborated_by": [names.get(p, p) for p in by_person]
+            if len(by_person) >= 2 else [],
+            "whens": whens,
+            "disagreements": disagreements,
+        })
+    persons = [{"person_id": pid, "display_name": names.get(pid, pid)}
+               for pid in wanted]
+    return entities, persons
+
+
 def parse_consent_bool(value):
     """Accept bools and gentle yes/no spellings; anything else is None."""
     if value is None:
@@ -1572,8 +1777,8 @@ def load_ask_candidates(session_ids):
     Returns (candidates, known_ids). Unknown/corrupt sessions recover to
     empty (same corrupt-tolerant pattern as load_threads/load_consent).
     Instruction-like segments/facts are quarantined (stored, not cited).
-    Each candidate: {session_id, clip_id, start, end, text, when,
-    distress, kind}.
+    Each candidate: {session_id, person_id, clip_id, start, end, text,
+    when, distress, kind}.
     """
     candidates, known = [], []
     for raw in session_ids or []:
@@ -1586,6 +1791,7 @@ def load_ask_candidates(session_ids):
         if not ok:
             continue
         known.append(sid)
+        pid = session_person_id(sid)
         try:
             lines = (sdir / "transcript.jsonl").read_text().splitlines()
         except OSError:
@@ -1618,7 +1824,8 @@ def load_ask_candidates(session_ids):
                 if not e > s:
                     continue
                 candidates.append({
-                    "session_id": sid, "clip_id": clip_id,
+                    "session_id": sid, "person_id": pid,
+                    "clip_id": clip_id,
                     "start": s, "end": e, "text": text, "when": "",
                     "distress": distress, "kind": "segment",
                 })
@@ -1648,7 +1855,8 @@ def load_ask_candidates(session_ids):
             if not e > s:
                 continue
             candidates.append({
-                "session_id": sid, "clip_id": clip_id,
+                "session_id": sid, "person_id": pid,
+                "clip_id": clip_id,
                 "start": s, "end": e, "text": text,
                 "when": str(f.get("when", "") or ""),
                 "distress": False, "kind": "fact",
@@ -1875,6 +2083,8 @@ def answer_ask(question, session_ids):
         answer = extractive_ask_answer(question, top, distress_hit)
     citations = [{
         "session_id": c.get("session_id", ""),
+        "person_id": c.get("person_id", "") or session_person_id(
+            c.get("session_id", "")),
         "clip_id": c.get("clip_id", ""),
         "start": c.get("start", 0.0),
         "end": c.get("end", 0.0),
@@ -2025,13 +2235,19 @@ def answer_character(question, session_id, requester, invite_code):
     if not ok:
         return 403, {"error": "reconstruction not available for this session"}
     base = answer_ask(question, [sid])
+    out = style_character_answer(question, base, sessions=[sid])
+    return 200, out
+
+
+def style_character_answer(question, base, sessions=()):
+    """Day-2 answer -> styled character answer + label (no gate here)."""
     label = CHARACTER_LABEL
     if base.get("unanswered"):
         # Unanswered keeps the EXACT Day-2 sentence (grounding contract);
         # the label rides the dedicated fields + the UI banner/footer.
         out = dict(base)
         out.update({"reconstruction": True, "ai_label": label})
-        return 200, out
+        return out
     # Embellishment-bait net (character-strict, Day-2 untouched): a
     # question sentence whose 2+ content words are matched by NEITHER the
     # cited sources NOR the query expansion states a frequency, material,
@@ -2056,9 +2272,10 @@ def answer_character(question, session_id, requester, invite_code):
             len({_char_stem(t) for t in ask_content_terms(s)}
                 - {_char_stem(t) for t in quote_terms} - bridge) >= 2
             for s in sentences):
-        out = unanswered_response(base.get("expanded_terms", []), [sid])
+        out = unanswered_response(base.get("expanded_terms", []),
+                                  list(sessions or []))
         out.update({"reconstruction": True, "ai_label": label})
-        return 200, out
+        return out
     distress_hit = str(base.get("answer_text", "")).startswith(GENTLE_PREFIX)
     upset = bool(VISITOR_UPSET_RE.search(question or ""))
     use_mock = os.environ.get("MOCK_LLM", "1") != "0"
@@ -2121,6 +2338,36 @@ def answer_character(question, session_id, requester, invite_code):
         "ai_label": label,
         "fallback": fallback,
     })
+    return out
+
+
+def answer_character_person(question, person_id, requester, invite_code):
+    """Day-3 per-relative pipeline: gate + answer over one person's archive.
+
+    Single person only (multi-person characters are NOT offered). The gate
+    is per-person: allowed only when THAT person's consent is
+    ai_reconstruction true, unrevoked, and unretired, plus the per-person
+    (requester, invite_code) check. Revoking/retiring this person silences
+    only their character. Sessions whose own consent is revoked are
+    silently excluded from the person's scope.
+    """
+    pid = sanitize_id(person_id or "", default="")
+    if load_person(pid) is None:
+        return 403, {"error": "reconstruction not available for this person"}
+    ok, _ = check_character_access(person_dir(pid), requester, invite_code)
+    if not ok:
+        return 403, {"error": "reconstruction not available for this person"}
+    scope = [sid for sid in person_scope_sessions([pid])]
+    if not scope:
+        out = unanswered_response([], [])
+        out.update({"reconstruction": True, "ai_label": CHARACTER_LABEL,
+                    "person_id": pid})
+        return 200, out
+    base = answer_ask(question, scope)
+    # Same style pass + label as the single-session path (no session
+    # re-gate: the per-person gate above already passed).
+    out = style_character_answer(question, base, sessions=scope)
+    out["person_id"] = pid
     return 200, out
 
 
@@ -2517,6 +2764,19 @@ class Handler(BaseHTTPRequestHandler):
                     "consent": public_consent(
                         load_person_consent(person_id)),
                 })
+        elif parsed.path == "/api/family-entities":
+            qs = parse_qs(parsed.query)
+            raw = []
+            for key in ("person_ids", "person_id"):
+                for val in qs.get(key, []):
+                    raw.extend(str(val or "").split(","))
+            raw = [sanitize_id(p or "", default="") for p in raw]
+            raw = [p for p in raw if p]
+            if not raw:
+                self._send_json({"error": "person_ids is required"}, 400)
+            else:
+                entities, persons = collect_family_entities(raw)
+                self._send_json({"entities": entities, "persons": persons})
         elif parsed.path.startswith("/i/"):
             token = parsed.path[len("/i/"):]
             if not token or "/" in token:
@@ -2745,10 +3005,34 @@ class Handler(BaseHTTPRequestHandler):
                 raw_ids = [raw_ids]
             session_ids = [sanitize_id(s) for s in raw_ids
                            if str(s or "").strip()]
+            raw_pids = payload.get("person_ids")
+            person_scope = ("person_ids" in payload)
+            person_ids = []
+            if raw_pids is not None:
+                if not isinstance(raw_pids, list):
+                    raw_pids = [raw_pids]
+                person_ids = [sanitize_id(p) for p in raw_pids
+                              if str(p or "").strip()]
             if not question:
                 self._send_json({"error": "question is required"}, 400)
                 return
+            if person_scope:
+                # Ask-the-family across consenting relatives: explicit
+                # person ids resolve to their archive-allowed sessions
+                # (unknown/revoked persons dropped silently, never leak);
+                # explicit session ids keep the legacy contract below.
+                resolved = person_scope_sessions(person_ids)
+                session_ids = resolved + [
+                    s for s in session_ids if s not in resolved]
+            elif "session_ids" not in payload:
+                # Omitted scope = every person whose per-person consent
+                # currently allows archive answers (unrevoked).
+                session_ids = person_scope_sessions(all_person_ids())
             if not session_ids:
+                if person_scope or "session_ids" not in payload:
+                    # Nothing in scope answers (all unknown/revoked/empty).
+                    self._send_json(answer_ask(question, []))
+                    return
                 self._send_json({"error": "session_ids is required"}, 400)
                 return
             if demo_mode_enabled() and any(
@@ -2760,18 +3044,21 @@ class Handler(BaseHTTPRequestHandler):
             if self._rate_limited():
                 return
             # Revoke covers ALL reuse: a revoked session's archive answers
-            # go dark immediately. (Retire leaves Day-2 answers intact.)
+            # go dark immediately — via the session's own consent OR its
+            # bound person's consent. (Retire leaves Day-2 answers intact.)
             for sid in session_ids:
-                sdir = RECORDINGS / sid
-                try:
-                    confined = (sdir.is_dir()
-                                and RECORDINGS in sdir.resolve().parents)
-                except OSError:
-                    confined = False
-                if confined and load_consent(sdir).get("revoked"):
-                    self._send_json(
-                        {"error": "consent withdrawn for this session"}, 403)
-                    return
+                if session_archive_blocked(sid):
+                    sdir = RECORDINGS / sid
+                    try:
+                        confined = (sdir.is_dir()
+                                    and RECORDINGS in sdir.resolve().parents)
+                    except OSError:
+                        confined = False
+                    if confined:
+                        self._send_json(
+                            {"error": "consent withdrawn for this session"},
+                            403)
+                        return
             self._send_json(answer_ask(question, session_ids))
             return
         if parsed.path == "/api/character":
@@ -2782,14 +3069,26 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json({"error": "invalid JSON body"}, 400)
                 return
             question = str(payload.get("question") or "").strip()
+            if not question:
+                self._send_json({"error": "question is required"}, 400)
+                return
+            if payload.get("person_id"):
+                # Talk-with-a-relative: single person only (multi-person
+                # characters are NOT offered). Per-person gate; the
+                # person's archive answers in their own phrasing.
+                # (In DEMO_MODE no persons exist, so the gate below 403s.)
+                if self._rate_limited():
+                    return
+                status, body = answer_character_person(
+                    question, payload.get("person_id"),
+                    payload.get("requester"), payload.get("invite_code"))
+                self._send_json(body, status)
+                return
             raw_ids = payload.get("session_ids") or []
             if not isinstance(raw_ids, list):
                 raw_ids = [raw_ids]
             session_ids = [sanitize_id(s) for s in raw_ids
                            if str(s or "").strip()]
-            if not question:
-                self._send_json({"error": "question is required"}, 400)
-                return
             # Single-session only (spec cut list): one invite code grants
             # one session, checked server-side on every call.
             if len(session_ids) != 1:
