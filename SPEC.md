@@ -1,9 +1,37 @@
 # Oral History Interviewer — Product Spec
 
-## Vision
-A browser-based voice interviewer that helps families capture oral histories.
-An AI asks gentle follow-up questions, records answers, and turns them into a
-citable timeline and family map.
+## Vision (generational)
+The APP is the interviewer. A setup helper (e.g. a grandson) sets the family
+up once; each interviewee (e.g. a grandparent) gets one personal link and
+just talks — no codes, no accounts, no typing for elders. The app asks gentle
+follow-up questions, records answers, and turns them into a citable timeline
+and family map that descendants explore generations later. Roles are
+fluid, not hard-coded: anyone in the family can be an interviewee —
+including the helper ("Add me too") — and one person can help set up,
+record, and ask across generations; the archive includes whoever
+recorded.
+
+## Roles (fluid — NOT hard-coded castes)
+- A **person** is any family member with a record (`person_id`). ONE person
+  can hold several roles at once: helper, interviewee, and
+  descendant-asker are things a person DOES, not kinds of people.
+- **Helper** (setup role, e.g. a grandson — but anyone): creates the
+  family, registers one record per interviewee, shares each personal
+  link, and leaves next-time topics. Never required to sit in on the
+  interview. Setting up YOURSELF is exactly as easy as setting up a
+  grandparent ("Add me too" creates your own `person_id` + personal
+  link alongside theirs).
+- **Interviewee** (recording role, e.g. a grandparent — but anyone,
+  INCLUDING the helper): opens their personal link and talks. Auto
+  start/resume, push-to-talk only. No codes, no accounts, no resume
+  codes to type. The archive includes whoever recorded, across
+  generations — a helper who records is archived like any interviewee.
+- **Descendant / asker** (exploring role, generations later — but also
+  today): explores timelines, the family map, Ask-the-family answers,
+  and per-relative reconstructions. Exploring is read-only and never
+  adds to the archive; but an asker who ALSO records does so through
+  their own interviewee personal link, so the archive keeps growing
+  generation after generation.
 
 ## Voice interview loop (adaptive)
 1. Browser plays the next interview question via TTS (`speechSynthesis`).
@@ -98,8 +126,92 @@ citable timeline and family map.
 - `data/facts.json` (or per-session JSON) holds extracted facts with citations.
 - No cloud storage, no database server in v1. No Modal, no remote GPU.
 
+## Generational model (Phase 1 spec; implementation follows)
+- **Per-interviewee personal link + auto start/resume.** One `person_id`
+  per interviewee, one unguessable personal link
+  (`GET /i/<person_token>` resolving to `?person=<person_id>`). Opening the
+  link auto-starts a session for that person and auto-resumes their open
+  threads/facts/consent on the next visit — the elder never types a resume
+  code, invite code, or password. Tokens are random unguessable secrets,
+  stored hashed server-side like invite codes); whoever holds a link
+  (usually the helper distributing them, or the person themselves via
+  "Add me too") is the only party who needs to handle it. A person who
+  both helps and records simply holds their own link plus any links
+  they distribute.
+  New: `POST /api/people {display_name}` → `{person_id, person_token,
+  personal_link}`; `GET /api/person?person_id=` (helper/descendant view);
+  `POST /api/turn` accepts `person_id` (+ token-cookie/header) and binds
+  the session to that person (`recordings/<session>/person.json`
+  `{person_id}`; per-person index `recordings/people/<person_id>/sessions.json`).
+  Same turn/facts/threads/clip shapes otherwise.
+- **Helper leaves next-time topics (never interrupts).** The helper may
+  leave short topics/questions for a specific interviewee:
+  `POST /api/next-topics {person_id, topics: [str]}` (stored per person in
+  `recordings/people/<person_id>/next_topics.json`
+  `[{id, text, status: queued|asked, created_at}]`). They surface ONLY as
+  candidate openers/follow-ups at the START of a future session (or when no
+  open thread fits), marked `asked` once used. They are HELD (not asked)
+  when the interviewee is judged tired/distressed (`pause_suggested` or
+  turn `distress: true`), and they NEVER interrupt mid-conversation.
+- **Person-level identity + cross-person entities.** Every session belongs
+  to exactly one `person_id`; facts/clips stay per-session (citation
+  invariant unchanged), and a DERIVED cross-person entity index groups
+  normalized names (people/places) across relatives WITHOUT merging:
+  `GET /api/family-entities?person_ids=[...]` →
+  `{entities: [{name, mentions: [{person_id, session_id, clip_id, start,
+  end, quote}]}]}`. Each mention keeps its own per-relative cited clip;
+  clips play via the unchanged `GET /api/clip`.
+- **Corroboration + disagreement (never merged).** When ≥2 consenting
+  relatives cite the same entity/event, the UI shows "both mention this"
+  (a corroboration badge listing each relative's cited clip). When cited
+  accounts conflict (different dates/details), the UI shows them
+  side-by-side with per-relative citations — NEVER merged into one
+  "canonical" fact, never auto-corrected.
+- **Ask-the-family across ALL consenting relatives.** `POST /api/ask`
+  gains an optional `person_ids` scope; omitted = all persons whose
+  per-person consent currently allows archive answers (unrevoked; retire
+  does not block Day-2 archive answers unless the family closes archive
+  access). Per-claim playable citations required as today, now spanning
+  relatives: each citation carries `{person_id, session_id, clip_id,
+  start, end, quote}`. Persons without consent are silently excluded
+  (never leak across scope). No new knowledge source; same grounding
+  contract.
+- **Talk-with-a-relative per-person consent + retirement.** The character
+  mode is per-relative: `POST /api/character` takes `{person_id,
+  question, requester, invite_code}` (single person; multi-person
+  characters are NOT offered). The gate is per-person: allowed only when
+  THAT person's consent is `ai_reconstruction: true`, unrevoked, and
+  unretired, plus the per-person (`requester`, `invite_code`) check.
+  Revoke/retire are per person: revoking person A silences A's archive +
+  character without touching person B; retiring A disables only A's
+  character (A's wishes/recordings stay intact; un-retire restores).
+  Consent storage moves from per-session `consent.json` to per-person
+  `recordings/people/<person_id>/consent.json` (same shape incl.
+  `access_list`/`invite_codes`/`retired`/`revoked`); existing per-session
+  files read as fallback during migration. No cloned voice by default
+  (unchanged: stretch only, `voice_clone: true` per person required,
+  real-clip fallback always available).
+
+## Safety (all carried forward, per person)
+- Grounding + citations: every claim cites a playable clip slice; "I
+  couldn't find that in the recordings." + no-merge + no-invention rules
+  unchanged, now across relatives.
+- Consent PER PERSON: per-interviewee record; archive/character scope
+  checks run per person on every call (default-deny).
+- Revoke/retire PER PERSON (separate actions, separate fields, separate
+  effects — see above).
+- Grief + fatigue handling: model-judged (never keywords); gentle repair
+  question; pause suggestion never force-stops; distress tone keyed ONLY
+  on turn `distress: true`, never on `pause_suggested`; next-time topics
+  held when tired/distressed; character never initiates difficult topics
+  or role-plays distress.
+- No cloned voice by default: hidden unless per-person
+  `voice_clone: true`.
+
 ## Explicit non-goals
 - No Baseten (ASR/TTS) — browser speech only.
 - No Modal (remote compute) — local server only.
 - No real-time streaming transcription — push-to-talk turns only.
-- No user accounts / multi-tenancy in v1.
+- No user accounts for interviewees in v1 (personal links, not logins).
+  Helper/descendant auth stays out of scope until the deployment accounts
+  work in docs/SPEC-archive-character.md §10.2 lands.

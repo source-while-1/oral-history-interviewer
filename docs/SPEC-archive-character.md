@@ -3,6 +3,13 @@
 Status: SPEC ONLY. No code implements this file. It constrains future
 Day 2 / Day 3 work against the v1 interview loop, storage, consent, and
 grief-handling that already exist.
+Generational update (Phase 1): the APP is the interviewer; a setup helper
+(e.g. grandson — but anyone) sets up; each interviewee (any family member,
+INCLUDING the helper via "Add me too") gets one personal link; roles are
+FLUID, not hard-coded castes — one person can be helper, interviewee, and
+descendant-asker at once, and the archive includes whoever recorded across
+generations; all safety below now applies PER PERSON.
+See [SPEC.md](../SPEC.md) §§ Vision/Roles/Generational model/Safety.
 
 ## 0. Context: what exists today (do not re-litigate)
 
@@ -178,7 +185,9 @@ retrieval, not a new knowledge source: the same grounding contract
 
 - No proactive messaging, no memory across visits beyond the archive,
   no new facts learned from visitors (visitors are read-only; their
-  words are never added to the archive).
+  words are never added to the archive — a visitor who wants to record
+  does so as an interviewee through their own personal link, per the
+  fluid-roles rule in §8b).
 
 ## 3. Architecture
 
@@ -324,6 +333,57 @@ BOTH paths — MOCK-only is not a pass.
 - Scope creep into editing history: "correcting" the archive —
   out of scope; the archive is append-only.
 
+## 8b. Generational archive (Phase 1 spec; implementation follows)
+
+Roles (fluid, not castes): any person can set up (registers one
+`person_id` per interviewee — including THEMSELVES via "Add me too" —
+shares each personal link, leaves next-time topics); any person (including
+the helper) records as an interviewee via their own personal link (auto
+start/resume, no codes/accounts); any person across generations explores
+as an asker/descendant (exploring is read-only; an asker who also records
+does so through their own interviewee link). The archive includes whoever
+recorded. One `person_id` may act in several roles at once.
+
+- **Per-interviewee personal link + auto start/resume.** One `person_id`
+  per interviewee; personal link `GET /i/<person_token>` → auto-starts a
+  session bound to that person and auto-resumes open threads/facts/consent.
+  New: `POST /api/people`, `GET /api/person`, `POST /api/turn` accepts
+  `person_id`; `recordings/<session>/person.json` + per-person index
+  `recordings/people/<person_id>/sessions.json`. Same turn shapes.
+- **Helper next-time topics.** `POST /api/next-topics {person_id, topics}`
+  → `recordings/people/<person_id>/next_topics.json
+  [{id, text, status: queued|asked, created_at}]`. Surfaced only as
+  openers/follow-ups at a future session START (or when no open thread
+  fits); HELD while tired/distressed; NEVER interrupts mid-conversation.
+- **Person-level identity + cross-person entities with per-relative cited
+  clips.** Sessions belong to exactly one `person_id`; facts/clips stay
+  per-session. Derived index `GET /api/family-entities?person_ids=`
+  groups normalized people/places WITHOUT merging; every mention keeps
+  its own `{person_id, session_id, clip_id, start, end, quote}` playable
+  via `GET /api/clip`.
+- **Corroboration shown, disagreements side-by-side, never merged.** ≥2
+  consenting relatives citing the same entity/event → "both mention this"
+  badge with each relative's cited clip. Conflicting cited accounts →
+  side-by-side with per-relative citations; no canonical merge, no
+  auto-correction.
+- **Ask-the-family across ALL consenting relatives.** `POST /api/ask`
+  gains optional `person_ids`; omitted = every person whose per-person
+  consent allows archive answers. Citations span relatives
+  (`{person_id, ...}`); non-consenting persons silently excluded. Same
+  grounding contract (§1.2) unchanged.
+- **Talk-with-a-relative per-person consent + retirement.** Character is
+  single-`person_id` only (`POST /api/character {person_id, ...}`; no
+  multi-person characters). Gate + revoke + retire are per person
+  (revoking A silences A's archive+character only; retiring A disables
+  only A's character; un-retire restores). Consent moves to per-person
+  `recordings/people/<person_id>/consent.json` (same shape; per-session
+  files as migration fallback).
+- **Safety kept, per person:** grounding+citations, consent per person,
+  revoke/retire per person, grief+fatigue handling (next-time topics held
+  when tired/distressed; distress tone keyed ONLY on turn `distress:
+  true`), no cloned voice by default (per-person `voice_clone: true`
+  required, real-clip fallback always).
+
 ## 9. Cut list (if time runs short)
 
 1. Cut cloned voice first (stretch; real-clip fallback already
@@ -332,6 +392,8 @@ BOTH paths — MOCK-only is not a pass.
 3. Cut the style pass (ship Day 2 Q&A; character label + gate ride
    the same API later).
 4. Cut the retrieval cache (answer fresh each time).
+5. Cut cross-person corroboration UI before per-person consent (badges can
+   wait; per-person gates cannot).
 5. Never cut: citation-per-claim, "I couldn't find that in the
    recordings.", consent gate + revoke/retire split,
    anti-hallucination eval set (MOCK + LIVE).
