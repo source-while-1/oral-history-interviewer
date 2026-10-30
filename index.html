@@ -377,7 +377,7 @@ talkBtn.onmouseup = talkBtn.ontouchend = async (e) => {
 
 document.getElementById("keepgoing").onclick = () => showPauseBanner(false);
 document.getElementById("pausequit").onclick = () =>
-  endSession("Interview paused. Clips saved under recordings/" + sessionId + "/");
+  endSession("Interview paused. Your story is saved — use the resume code above to continue it another time.");
 document.getElementById("copycode").onclick = async () => {
   try {
     await navigator.clipboard.writeText(sessionId);
@@ -401,7 +401,7 @@ document.getElementById("c-save").onclick = () => postConsent({
 document.getElementById("c-revoke").onclick = () => postConsent({revoke: true});
 
 document.getElementById("finish").onclick = () => {
-  endSession("Interview finished. Clips saved under recordings/" + sessionId + "/");
+  endSession("Interview finished. Your story is saved — thank you for sharing it.");
 };
 
 // One clear path: three modes, one visible step at a time.
@@ -450,8 +450,12 @@ async function askArchive() {
     const data = await res.json();
     if (!res.ok) { ans.textContent = data.error || ("server error " + res.status); return; }
     ans.textContent = data.answer_text || "";
+    const seenAsk = new Set();
     (data.citations || []).forEach(c => {
       const key = c.session_id + ":" + c.clip_id;
+      const slice = key + ":" + c.start + "-" + c.end;
+      if (seenAsk.has(slice)) return;  // same clip slice cited twice: show once
+      seenAsk.add(slice);
       clips[key] = {
         audioUrl: "/api/clip?session_id=" + encodeURIComponent(c.session_id)
           + "&clip_id=" + encodeURIComponent(c.clip_id),
@@ -503,8 +507,12 @@ async function askCharacter() {
     ans.textContent = data.answer_text || "";
     document.getElementById("charlabel").textContent =
       data.ai_label || "AI reconstruction built from recordings — not the person.";
+    const seenChar = new Set();
     (data.citations || []).forEach(c => {
       const key = c.session_id + ":" + c.clip_id;
+      const slice = key + ":" + c.start + "-" + c.end;
+      if (seenChar.has(slice)) return;  // same clip slice cited twice: show once
+      seenChar.add(slice);
       clips[key] = {
         audioUrl: "/api/clip?session_id=" + encodeURIComponent(c.session_id)
           + "&clip_id=" + encodeURIComponent(c.clip_id),
