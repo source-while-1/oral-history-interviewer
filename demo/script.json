@@ -1,98 +1,128 @@
 {
-  "_note": "SYNTHETIC DEMO SCRIPT. Every person, place, and event below is fictional and was invented for this hackathon demo. No real voices, names, or personal data are involved: the audio clips are generated silence, and the 'transcripts' are typed strings fed to /api/turn exactly as a browser STT result would be. Each turn is genuine first-person speech by its labeled speaker: Rosa and Emil each say 'I', and each names only the OTHER (the MOCK stub opens a person thread per 'Title Name' mention, so cross-mentions keep the family map filled).",
+  "_note": "SYNTHETIC DEMO SCRIPT. Every person, place, and event below is fictional and was invented for this hackathon demo. No real voices, names, or personal data are involved: the audio clips are generated silence, and the 'transcripts' are typed strings fed to /api/turn exactly as a browser STT result would be. Each turn is genuine first-person speech by its labeled speaker: Rosa and Emil each say 'I', and each names only the OTHER (the MOCK stub opens a person thread per 'Title Name' mention, so cross-mentions keep the family map filled). Both relatives tell overlapping stories -- the farm, the red barn, the county fair pie prize -- with ONE small honest disagreement (Emil says the barn went up in 1958, Rosa remembers 1959) so the family archive can show corroboration next to a side-by-side disagreement instead of a merged fact.",
+  "resume_session_id": "demo-resumed",
+  "resume_turn": {
+    "segments": [
+      {
+        "end": 3.5,
+        "id": "seg-0",
+        "start": 0.0,
+        "text": "Back again -- Grandpa Emil taught me everything"
+      },
+      {
+        "end": 6.0,
+        "id": "seg-1",
+        "start": 3.5,
+        "text": "about the harvest, just like I said."
+      }
+    ],
+    "speaker": "Aunt Rosa",
+    "transcript": "Back again -- Grandpa Emil taught me everything about the harvest, just like I said."
+  },
   "session_id": "demo-synthetic",
   "turns": [
     {
-      "transcript": "I grew up on a farm in Ohio with Grandpa Emil. I kept goats behind the red barn.",
       "segments": [
         {
+          "end": 4.0,
           "id": "seg-0",
-          "text": "I grew up on a farm in Ohio with Grandpa Emil.",
           "start": 0.0,
-          "end": 3.5
+          "text": "I grew up on a farm in Ohio with Grandpa Emil."
         },
         {
+          "end": 8.0,
           "id": "seg-1",
-          "text": "I kept goats behind the red barn.",
-          "start": 3.5,
-          "end": 6.0
-        }
-      ],
-      "speaker": "Aunt Rosa"
-    },
-    {
-      "transcript": "I built that barn in 1958 with my brother. Aunt Rosa and I worked the harvest together.",
-      "segments": [
-        {
-          "id": "seg-0",
-          "text": "I built that barn in 1958 with my brother.",
-          "start": 0.0,
-          "end": 4.0
-        },
-        {
-          "id": "seg-1",
-          "text": "Aunt Rosa and I worked the harvest together.",
           "start": 4.0,
-          "end": 6.5
+          "text": "I kept goats behind the red barn, and I still remember harvest time on that farm."
         }
       ],
-      "speaker": "Grandpa Emil"
+      "speaker": "Aunt Rosa",
+      "transcript": "I grew up on a farm in Ohio with Grandpa Emil. I kept goats behind the red barn, and I still remember harvest time on that farm."
     },
     {
-      "transcript": "I won the county fair pie prize — we still talk about it every winter.",
       "segments": [
         {
+          "end": 4.0,
           "id": "seg-0",
-          "text": "I won the county fair pie prize",
           "start": 0.0,
-          "end": 4.5
+          "text": "I built that barn in 1958 with my brother."
         },
         {
+          "end": 8.5,
           "id": "seg-1",
-          "text": "we still talk about it every winter.",
+          "start": 4.0,
+          "text": "Aunt Rosa and I worked the harvest together on the farm."
+        }
+      ],
+      "speaker": "Grandpa Emil",
+      "transcript": "I built that barn in 1958 with my brother. Aunt Rosa and I worked the harvest together on the farm."
+    },
+    {
+      "segments": [
+        {
+          "end": 5.0,
+          "id": "seg-0",
+          "start": 0.0,
+          "text": "I won the county fair pie prize -- we still talk about it every winter."
+        },
+        {
+          "end": 10.0,
+          "id": "seg-1",
+          "start": 5.0,
+          "text": "Grandpa Emil says the barn went up in 1958, but I remember it as 1959."
+        }
+      ],
+      "speaker": "Aunt Rosa",
+      "transcript": "I won the county fair pie prize -- we still talk about it every winter. Grandpa Emil says the barn went up in 1958, but I remember it as 1959."
+    },
+    {
+      "segments": [
+        {
+          "end": 5.0,
+          "id": "seg-0",
+          "start": 0.0,
+          "text": "I still brag about our county fair pie prize to everyone at the winter market."
+        },
+        {
+          "end": 10.0,
+          "id": "seg-1",
+          "start": 5.0,
+          "text": "Aunt Rosa and I share a slice every winter, back home on the farm."
+        }
+      ],
+      "speaker": "Grandpa Emil",
+      "transcript": "I still brag about our county fair pie prize to everyone at the winter market. Aunt Rosa and I share a slice every winter, back home on the farm."
+    },
+    {
+      "segments": [
+        {
+          "end": 4.5,
+          "id": "seg-0",
+          "start": 0.0,
+          "text": "I loved our life on that farm, from my goats to the harvest table."
+        },
+        {
+          "end": 9.0,
+          "id": "seg-1",
           "start": 4.5,
-          "end": 7.0
+          "text": "Grandpa Emil always saved me the first taste of everything we grew."
         }
       ],
-      "speaker": "Aunt Rosa"
+      "speaker": "Aunt Rosa",
+      "transcript": "I loved our life on that farm, from my goats to the harvest table. Grandpa Emil always saved me the first taste of everything we grew."
     },
     {
-      "_note": "Short wrap-up turn on purpose: the MOCK/offline path judges fatigue behaviorally (answer shortening vs the session baseline, no keywords), so a long explicit 'I'm tired' speech would NOT pause there. The real LLM path still judges explicit first-person tiredness directly.",
-      "transcript": "Not much more to say today.",
+      "_note": "Short wrap-up turn on purpose: it stays first-person ('I') for the speaker check, but its brevity against the longer turns above is what the MOCK/offline path judges behaviorally (answer shortening vs the session baseline, no keywords). The real LLM path judges explicit first-person tiredness directly.",
       "segments": [
         {
+          "end": 2.5,
           "id": "seg-0",
-          "text": "Not much more to say",
           "start": 0.0,
-          "end": 2.0
-        },
-        {
-          "id": "seg-1",
-          "text": "today.",
-          "start": 2.0,
-          "end": 3.0
+          "text": "I think I need to rest a little now."
         }
       ],
-      "speaker": "Grandpa Emil"
+      "speaker": "Grandpa Emil",
+      "transcript": "I think I need to rest a little now."
     }
-  ],
-  "resume_session_id": "demo-resumed",
-  "resume_turn": {
-    "transcript": "Back again — Grandpa Emil taught me everything about the harvest, just like I said.",
-    "segments": [
-      {
-        "id": "seg-0",
-        "text": "Back again — Grandpa Emil taught me everything",
-        "start": 0.0,
-        "end": 3.5
-      },
-      {
-        "id": "seg-1",
-        "text": "about the harvest, just like I said.",
-        "start": 3.5,
-        "end": 6.0
-      }
-    ],
-    "speaker": "Aunt Rosa"
-  }
+  ]
 }
