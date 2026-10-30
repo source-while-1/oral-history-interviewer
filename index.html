@@ -27,6 +27,24 @@
   .tour { display: inline-block; margin: .25rem 0; }
   input[type="text"], input:not([type]) { width: 100%; max-width: 26rem; }
   #askq, #charq { width: 100%; max-width: 26rem; }
+  /* Elder accessibility pass: large type + high contrast, opt-in. */
+  body.a11y-large { font-size: 1.25rem; line-height: 1.7; max-width: 880px; }
+  body.a11y-large #q { font-size: 1.6rem; }
+  body.a11y-large button { font-size: 1.25rem; padding: .9rem 1.4rem; }
+  body.a11y-large input, body.a11y-large select { font-size: 1.2rem; }
+  body.a11y-contrast { background: #fff; color: #000; }
+  body.a11y-contrast #q, body.a11y-contrast #askbox { background: #fff !important; border: 2px solid #000; }
+  body.a11y-contrast .hint, body.a11y-contrast #charlabel { color: #222 !important; }
+  body.a11y-contrast button { border: 2px solid #000; }
+  body.a11y-contrast a { color: #0000cc; }
+  #a11ybar { display: flex; gap: .5rem; flex-wrap: wrap; margin: 1rem 0; }
+  #a11ybar button[aria-pressed="true"] { border: 2px solid #1a7f37; background: #e8f5e9; font-weight: 700; }
+  #caption { font-size: 1.4rem; background: #fffde7; border: 2px solid #8d6e00; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  #tree-nodes li, #tree-timeline li { margin: .5rem 0; }
+  #tree-nodes button { min-height: 48px; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
   @media (prefers-color-scheme: dark) {
     body { background: #111; color: #eee; }
     #q { background: #222; }
@@ -45,6 +63,13 @@
 <h1>Oral History Interviewer</h1>
 <p>Three steps, in order: <strong>1. Record a story</strong> → <strong>2. Ask the recordings</strong> → <strong>3. Talk with the AI reconstruction.</strong> Start at step 1.</p>
 <p><a class="tour" href="/how-it-works">How it works (50-second tour)</a></p>
+<div id="a11ybar" role="group" aria-label="Reading and listening options">
+  <button id="a11y-large" aria-pressed="false">Larger text</button>
+  <button id="a11y-contrast" aria-pressed="false">High contrast</button>
+  <button id="a11y-captions" aria-pressed="false">Written captions</button>
+  <button id="a11y-slow" aria-pressed="false">Slower speech</button>
+</div>
+<div id="caption" hidden aria-live="polite"></div>
 <nav class="modes" aria-label="Choose what to do">
   <button id="mode-interview" aria-current="step">Step 1: Record a story</button>
   <button id="mode-ask">Step 2: Ask the recordings</button>
@@ -177,6 +202,19 @@
 </div>
 </section>
 
+<section id="step-tree" aria-label="Living family tree and timeline">
+<h2>Family tree</h2>
+<div style="background:#f4f4f5;border-radius:8px;padding:1rem;margin:1rem 0;">
+  <p id="treescope">Everyone who recorded, in one place. Each name plays that person's own recorded voice; the timeline below walks through dated stories oldest-first. Only relatives who said their recordings may be shared appear here.</p>
+  <p><label>Relatives (personal ids, comma-separated): <input id="treepersons" autocomplete="off" placeholder="p-…, p-…"></label>
+  <button id="treeload" class="primary">Show the family tree</button></p>
+  <h3>Voices</h3>
+  <ul id="tree-nodes" aria-live="polite"><li>Load the tree to hear each voice.</li></ul>
+  <h3>Timeline</h3>
+  <ol id="tree-timeline" aria-live="polite"><li>Dated stories will appear here, oldest first.</li></ol>
+</div>
+</section>
+
 <script>
 const sessionId = "s-" + Date.now().toString(36);
 document.getElementById("sid").textContent = sessionId;
@@ -192,12 +230,42 @@ const q = document.getElementById("q");
 const statusEl = document.getElementById("status");
 const talkBtn = document.getElementById("talk");
 
+function a11yPref(key, fallback) {
+  try {
+    const v = localStorage.getItem("ohi-a11y-" + key);
+    return v === null ? fallback : v === "1";
+  } catch (e) { return fallback; }
+}
+
 function speak(text) {
+  if (a11yPref("captions", false)) {
+    const cap = document.getElementById("caption");
+    if (cap) { cap.hidden = false; cap.textContent = text; }
+  }
   try {
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
+    if (a11yPref("slow", false)) { u.rate = 0.8; u.pitch = 1.0; }
     speechSynthesis.speak(u);
   } catch (e) { /* TTS unavailable; question stays on screen */ }
+}
+
+function applyA11yPrefs() {
+  const map = [["large", "a11y-large"], ["contrast", "a11y-contrast"]];
+  map.forEach(([key, cls]) => {
+    const on = a11yPref(key, false);
+    document.body.classList.toggle(cls, on);
+    const b = document.getElementById("a11y-" + key);
+    if (b) b.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+  [["captions", "a11y-captions"], ["slow", "a11y-slow"]].forEach(([key, id]) => {
+    const b = document.getElementById(id);
+    if (b) b.setAttribute("aria-pressed", a11yPref(key, false) ? "true" : "false");
+  });
+  if (!a11yPref("captions", false)) {
+    const cap = document.getElementById("caption");
+    if (cap) { cap.hidden = true; cap.textContent = ""; }
+  }
 }
 
 function renderFacts() {
@@ -787,6 +855,82 @@ async function loadFamilyArchive() {
   }
 }
 document.getElementById("famload").onclick = loadFamilyArchive;
+function treePlayButton(entry) {
+  // entry: {session_id, clip_id, start, end} — plays the real recording,
+  // never a cloned voice.
+  const key = entry.session_id + "/" + entry.clip_id;
+  clips[key] = {
+    audioUrl: "/api/clip?session_id=" + encodeURIComponent(entry.session_id)
+      + "&clip_id=" + encodeURIComponent(entry.clip_id),
+    start: entry.start, end: entry.end
+  };
+  const b = document.createElement("button");
+  b.textContent = "▶ hear their voice";
+  b.title = "Plays this relative's own recorded voice";
+  b.onclick = () => replay(key);
+  return b;
+}
+async function loadFamilyTree() {
+  const nodes = document.getElementById("tree-nodes");
+  const tl = document.getElementById("tree-timeline");
+  const pids = document.getElementById("treepersons").value.split(",")
+    .map(s => s.trim()).filter(Boolean);
+  nodes.innerHTML = ""; tl.innerHTML = "";
+  if (!pids.length) {
+    nodes.textContent = "Enter the personal ids of the relatives to gather.";
+    return;
+  }
+  nodes.textContent = "Growing the family tree…";
+  try {
+    const qs = pids.map(p => "person_ids=" + encodeURIComponent(p)).join("&");
+    const res = await fetch("/api/family-tree?" + qs);
+    const data = await res.json();
+    nodes.innerHTML = ""; tl.innerHTML = "";
+    if (!res.ok) { nodes.textContent = data.error || ("server error " + res.status); return; }
+    if (!(data.nodes || []).length) {
+      nodes.textContent = "Nobody to show — those relatives may have withdrawn their recordings.";
+      tl.textContent = "";
+      return;
+    }
+    (data.nodes || []).forEach(n => {
+      const li = document.createElement("li");
+      const label = n.relation
+        ? `${n.display_name} (${n.relation}) — ${n.clip_count} recorded moment${n.clip_count === 1 ? "" : "s"} `
+        : `${n.display_name} — ${n.clip_count} recorded moment${n.clip_count === 1 ? "" : "s"} `;
+      li.textContent = label;
+      if (n.sample) li.appendChild(treePlayButton(n.sample));
+      nodes.appendChild(li);
+    });
+    if (!(data.timeline || []).length) {
+      const li = document.createElement("li");
+      li.textContent = "No dated stories yet — dates shared in recordings will grow this timeline.";
+      tl.appendChild(li);
+      return;
+    }
+    (data.timeline || []).forEach(t => {
+      const li = document.createElement("li");
+      li.textContent = `${t.when} — ${t.display_name}: ${t.text} ` +
+        `[${t.session_id} ${t.clip_id} ${t.start}-${t.end}s] `;
+      li.appendChild(treePlayButton(t));
+      tl.appendChild(li);
+    });
+  } catch (err) {
+    nodes.textContent = "Could not grow the tree: " + (err && err.message ? err.message : err);
+  }
+}
+document.getElementById("treeload").onclick = loadFamilyTree;
+// Reading and listening options: persist across visits, apply on load.
+["large", "contrast", "captions", "slow"].forEach(key => {
+  const btn = document.getElementById(key === "captions" ? "a11y-captions"
+    : key === "slow" ? "a11y-slow" : "a11y-" + key);
+  if (btn) btn.onclick = () => {
+    try {
+      localStorage.setItem("ohi-a11y-" + key, a11yPref(key, false) ? "0" : "1");
+    } catch (e) { /* private mode: choice lasts this visit */ }
+    applyA11yPrefs();
+  };
+});
+applyA11yPrefs();
 document.getElementById("charstop").onclick = () => {
   try { speechSynthesis.cancel(); } catch {}
   document.getElementById("charanswer").textContent =

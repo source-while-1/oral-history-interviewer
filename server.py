@@ -640,6 +640,86 @@ def collect_family_entities(person_ids):
     return entities, persons
 
 
+def collect_family_tree(person_ids):
+    """Living family tree + timeline, consent-filtered.
+
+    Returns (nodes, timeline): nodes is one entry per unrevoked person
+    [{person_id, display_name, relation, session_count, clip_count,
+    sample: {session_id, clip_id, start, end} | None}]. sample is the
+    person's first citable clip so every node can play their real voice.
+    timeline is every dated, citable fact across the persons, sorted by
+    `when` (undated facts excluded — a timeline needs dates), each with
+    per-relative citation fields. Revoked persons/sessions are silently
+    dropped (never leak across scope). Retire does NOT block the tree:
+    like entities, retire disables only the character.
+    """
+    wanted = []
+    for raw in person_ids or []:
+        pid = sanitize_id(raw or "", default="")
+        if pid and pid not in wanted and person_archive_allowed(pid):
+            wanted.append(pid)
+    nodes = []
+    timeline = []
+    for pid in wanted:
+        person = load_person(pid) or {}
+        sids = person_scope_sessions([pid])
+        clip_count = 0
+        sample = None
+        for sid in sids:
+            sdir = RECORDINGS / sid
+            try:
+                facts = json.loads((sdir / "facts.json").read_text())
+            except (ValueError, OSError):
+                continue
+            if not isinstance(facts, list):
+                continue
+            for f in facts:
+                if not isinstance(f, dict):
+                    continue
+                clip_id = str(f.get("clip_id", "") or "")
+                if not clip_id:
+                    continue
+                duration = clip_duration(sdir / (clip_id + ".wav"))
+                if duration is None:
+                    continue
+                try:
+                    s = float(f.get("start", 0.0))
+                    e = float(f.get("end", 0.0))
+                except (TypeError, ValueError):
+                    continue
+                s, e = clamp_fact_range(s, e, duration)
+                if not e > s:
+                    continue
+                clip_count += 1
+                if sample is None:
+                    sample = {"session_id": sid, "clip_id": clip_id,
+                              "start": s, "end": e}
+                when = str(f.get("when", "") or "").strip()
+                if not when:
+                    continue
+                timeline.append({
+                    "when": when,
+                    "text": str(f.get("text", "") or ""),
+                    "kind": str(f.get("kind", "") or ""),
+                    "person_id": pid,
+                    "display_name": str(person.get("display_name", "")
+                                       or pid),
+                    "session_id": sid,
+                    "clip_id": clip_id,
+                    "start": s, "end": e,
+                })
+        nodes.append({
+            "person_id": pid,
+            "display_name": str(person.get("display_name", "") or pid),
+            "relation": str(person.get("relation", "") or ""),
+            "session_count": len(sids),
+            "clip_count": clip_count,
+            "sample": sample,
+        })
+    timeline.sort(key=lambda t: (t["when"], t["display_name"], t["text"]))
+    return nodes, timeline
+
+
 def parse_consent_bool(value):
     """Accept bools and gentle yes/no spellings; anything else is None."""
     if value is None:
@@ -2777,6 +2857,19 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 entities, persons = collect_family_entities(raw)
                 self._send_json({"entities": entities, "persons": persons})
+        elif parsed.path == "/api/family-tree":
+            qs = parse_qs(parsed.query)
+            raw = []
+            for key in ("person_ids", "person_id"):
+                for val in qs.get(key, []):
+                    raw.extend(str(val or "").split(","))
+            raw = [sanitize_id(p or "", default="") for p in raw]
+            raw = [p for p in raw if p]
+            if not raw:
+                self._send_json({"error": "person_ids is required"}, 400)
+            else:
+                nodes, timeline = collect_family_tree(raw)
+                self._send_json({"nodes": nodes, "timeline": timeline})
         elif parsed.path.startswith("/i/"):
             token = parsed.path[len("/i/"):]
             if not token or "/" in token:
