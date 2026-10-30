@@ -136,7 +136,7 @@
     <summary>Which recordings? (usually filled in for you)</summary>
     <p><label>Recordings to search: <input id="askscopes" autocomplete="off"></label></p>
     <p><label>Or relatives to ask (personal ids, comma-separated): <input id="askpersons" autocomplete="off" placeholder="p-…, p-…"></label>
-    <span class="hint">Ask-the-family: searches every consenting relative listed; anyone who withdrew stays out silently.</span></p>
+    <span class="hint">Ask-the-family: leave both boxes blank to ask the whole family — every consenting relative. Anyone who withdrew stays out silently.</span></p>
   </details>
 </div>
 </section>
@@ -156,7 +156,7 @@
   </details>
   <p style="font-size:.9rem;color:#555;">Read-only: no recording here. If this feels like too much, press Stop anytime — we can pause or stop whenever you like.</p>
   <p><label>Or talk with one relative (personal id): <input id="charperson" autocomplete="off" placeholder="p-…"></label>
-  <span class="hint">One relative at a time; uses that relative's own consent and invite. Takes the place of "Which recording" above.</span></p>
+  <span class="hint">One relative at a time; uses only that relative's own recorded words under their own consent and invite. Takes the place of "Which recording" above. Retired relatives stay unavailable here while their archive answers keep working.</span></p>
   <details>
     <summary>Who may enter (name and invite code)</summary>
     <p><label>Which recording: <input id="charscope" autocomplete="off"></label></p>
@@ -597,8 +597,10 @@ async function askArchive() {
   ul.innerHTML = "";
   ans.textContent = "Searching the recordings…";
   try {
+    // Blank scope = the whole consenting family (omitted scope server-side).
     const askBody = pids.length ? {person_ids: pids, question}
-      : {session_ids: sids, question};
+      : sids.length ? {session_ids: sids, question}
+      : {question};
     if (pids.length && sids.length) askBody.session_ids = sids;
     const res = await fetch("/api/ask", {
       method: "POST",
@@ -624,7 +626,8 @@ async function askArchive() {
       b.textContent = "▶ play cited clip";
       b.title = "Plays the recorded clip slice this answer cites";
       b.onclick = () => replay(key);
-      li.textContent = `[${c.session_id} ${c.clip_id} ${c.start}-${c.end}s] `
+      const who = c.person_id ? ` relative ${c.person_id}` : "";
+      li.textContent = `[${c.session_id}${who} ${c.clip_id} ${c.start}-${c.end}s] `
         + (c.quote || "").slice(0, 140) + " ";
       li.appendChild(b);
       ul.appendChild(li);
@@ -687,7 +690,7 @@ async function askCharacter() {
       b.textContent = "▶ play cited clip";
       b.title = "AI reconstruction — plays the recorded clip slice this answer cites";
       b.onclick = () => replay(key);
-      li.textContent = `[${c.session_id} ${c.clip_id} ${c.start}-${c.end}s] `
+      li.textContent = `[${c.session_id}${c.person_id ? " relative " + c.person_id : ""} ${c.clip_id} ${c.start}-${c.end}s] `
         + (c.quote || "").slice(0, 140) + " ";
       li.appendChild(b);
       ul.appendChild(li);
