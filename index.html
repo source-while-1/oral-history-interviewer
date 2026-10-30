@@ -10,6 +10,10 @@
   #q { font-size: 1.2rem; background: #f4f4f5; padding: 1rem; border-radius: 8px; }
   button { font-size: 1rem; padding: .6rem 1rem; margin: .5rem .25rem; }
   button.primary { font-weight: 700; font-size: 1.1rem; padding: .8rem 1.4rem; }
+  #start, #talk { min-height: 52px; }
+  #setup input, #setup select { font-size: 1rem; padding: .55rem; margin: .25rem 0; }
+  #links li { margin: .5rem 0; }
+  #links a { font-size: 1.05rem; }
   input, select { max-width: 100%; box-sizing: border-box; }
   #timeline li, #people li { margin: .4rem 0; }
   svg { border: 1px solid #ddd; border-radius: 8px; width: 100%; height: 220px; }
@@ -56,6 +60,23 @@
 <section id="step-interview" class="step" aria-label="Step 1: record a story">
 <h2>Step 1: Record a story</h2>
 <p class="hint">Press the button below, then answer out loud. One thing at a time — there is no wrong answer.</p>
+<p id="forperson" class="hint" hidden></p>
+<details id="setup">
+  <summary>Family setup (helper): personal links + next-time topics</summary>
+  <p class="hint">Create one record per person. Each person gets one personal link — opening it starts or continues their interview, no codes or accounts. Setting yourself up is just as easy (“Add me too”).</p>
+  <p><label>Their name: <input id="p-name" autocomplete="off" placeholder="e.g. Grandma Rosa"></label>
+  <label>Relation (optional): <input id="p-relation" autocomplete="off" placeholder="e.g. grandmother"></label>
+  <button id="p-create">Create personal link</button></p>
+  <p><label>Your name (to record too): <input id="p-self" autocomplete="off" placeholder="e.g. Sam"></label>
+  <button id="p-addme">Add me too — my own link</button></p>
+  <ul id="links"></ul>
+  <p><label>For:
+    <select id="t-person"><option value="">(create a link first)</option></select></label>
+  <label>Next time, ask about: <input id="t-text" autocomplete="off" placeholder="e.g. the bakery on Main Street"></label>
+  <button id="t-leave">Leave for next time</button>
+  <span id="t-status" class="hint"></span></p>
+  <p class="hint">Left topics open the next visit when nothing else fits. They wait if the speaker is tired, and never interrupt mid-conversation.</p>
+</details>
 <div id="q" aria-live="polite">Press “Start” to begin the interview.</div>
 <div id="pause" hidden style="background:#fff8e1;border:1px solid #e6c200;border-radius:8px;padding:1rem;margin:1rem 0;">
   <p>We've covered a lot — want to pause and pick this up another time?</p>
@@ -151,6 +172,7 @@ let facts = [];
 let threads = [];       // [{id, text, segment_id, status}]
 let firstTurn = true;
 let recorder = null, chunks = [], stream = null;
+let personId = "", personToken = "";  // set when a personal link is used
 
 const q = document.getElementById("q");
 const statusEl = document.getElementById("status");
@@ -257,6 +279,9 @@ function endSession(message) {
   talkBtn.disabled = true;
   document.getElementById("resumecodeval").textContent = sessionId;
   document.getElementById("resumecode").hidden = false;
+  // The helper can leave next-time topics at session end.
+  const setup = document.getElementById("setup");
+  if (setup) setup.open = true;
 }
 
 function replay(clipId) {
@@ -278,6 +303,7 @@ async function sendTurn(audioB64, transcript) {
     const text = typeof transcript === "string" ? transcript : (lastTranscript || "");
     const segments = text ? [{id: "seg-0", text, start: 0, end: 0}] : [];
     const body = {session_id: sessionId, audio_b64: audioB64, history, transcript: text, segments};
+    if (personId && personToken) { body.person_id = personId; body.person_token = personToken; }
     if (firstTurn) {
       const resumeFrom = (document.getElementById("resume").value || "").trim();
       if (resumeFrom) body.resume_from = resumeFrom;
@@ -403,6 +429,119 @@ document.getElementById("c-revoke").onclick = () => postConsent({revoke: true});
 document.getElementById("finish").onclick = () => {
   endSession("Interview finished. Your story is saved — thank you for sharing it.");
 };
+
+// Family setup: one record + one personal link per interviewee.
+// "Add me too" is the same call — anyone can record, helper included.
+function addPersonOption(id, name) {
+  const sel = document.getElementById("t-person");
+  if (!sel) return;
+  if ([...sel.options].some(o => o.value === id)) { sel.value = id; return; }
+  const o = document.createElement("option");
+  o.value = id; o.textContent = name;
+  sel.appendChild(o);
+  sel.value = id;
+}
+
+function renderLink(id, name, link) {
+  const ul = document.getElementById("links");
+  if (!ul) return;
+  const li = document.createElement("li");
+  const a = document.createElement("a");
+  a.href = link; a.textContent = "Personal link for " + name;
+  const copy = document.createElement("button");
+  copy.textContent = "Copy link";
+  copy.onclick = async () => {
+    const url = new URL(a.getAttribute("href"), location.origin).href;
+    try { await navigator.clipboard.writeText(url); copy.textContent = "Copied"; }
+    catch { copy.textContent = url; }
+  };
+  li.textContent = name + " — ";
+  li.appendChild(a);
+  li.appendChild(document.createTextNode(" "));
+  li.appendChild(copy);
+  ul.appendChild(li);
+}
+
+async function createPerson(name, relation) {
+  const res = await fetch("/api/people", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({display_name: name, relation: relation || ""})
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    statusEl.textContent = data.error || ("server error " + res.status);
+    return null;
+  }
+  renderLink(data.person_id, data.display_name, data.personal_link);
+  addPersonOption(data.person_id, data.display_name);
+  statusEl.textContent = "Personal link created for " + data.display_name + ".";
+  return data;
+}
+
+const pCreate = document.getElementById("p-create");
+if (pCreate) pCreate.onclick = async () => {
+  const name = document.getElementById("p-name").value.trim();
+  const relation = document.getElementById("p-relation").value.trim();
+  if (!name) { statusEl.textContent = "Enter their name first."; return; }
+  await createPerson(name, relation);
+};
+const pAddMe = document.getElementById("p-addme");
+if (pAddMe) pAddMe.onclick = async () => {
+  const name = document.getElementById("p-self").value.trim();
+  if (!name) { statusEl.textContent = "Enter your name first."; return; }
+  await createPerson(name, "self (helper)");
+};
+const tLeave = document.getElementById("t-leave");
+if (tLeave) tLeave.onclick = async () => {
+  const pid = document.getElementById("t-person").value;
+  const text = document.getElementById("t-text").value.trim();
+  const st = document.getElementById("t-status");
+  if (!pid) { if (st) st.textContent = "Pick who this is for first."; return; }
+  if (!text) { if (st) st.textContent = "Write the topic first."; return; }
+  try {
+    const res = await fetch("/api/next-topics", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({person_id: pid, topics: [text]})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { if (st) st.textContent = data.error || ("server error " + res.status); return; }
+    document.getElementById("t-text").value = "";
+    if (st) st.textContent = "Saved — it will open the next visit when nothing else fits.";
+  } catch (err) {
+    if (st) st.textContent = "Could not save: " + (err && err.message ? err.message : err);
+  }
+};
+
+// Personal link: opening it auto-starts/resumes that person's interview.
+(async function personalLink() {
+  const m = location.pathname.match(/^\/i\/([^/]+)$/);
+  if (!m) return;
+  const token = decodeURIComponent(m[1]);
+  try {
+    const res = await fetch("/api/people/lookup", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token})
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      q.textContent = "This personal link is not recognized. Ask your helper for a fresh one.";
+      return;
+    }
+    personId = data.person_id; personToken = token;
+    const fp = document.getElementById("forperson");
+    if (fp) {
+      fp.hidden = false;
+      fp.textContent = "Interviewing as " + data.display_name + " — your story starts below, and picks up where you left off.";
+    }
+    addPersonOption(personId, data.display_name || personId);
+    document.getElementById("start").click();
+  } catch {
+    q.textContent = "Could not open this personal link. Check your connection and try again.";
+  }
+})();
 
 // One clear path: three modes, one visible step at a time.
 // All panels and API calls stay; only visibility changes.

@@ -281,6 +281,160 @@ def save_consent(session_dir, consent):
         json.dumps(consent or blank_consent(), indent=2))
 
 
+# ---------------------------------------------------------------------------
+# Generational model, Phase 2: per-interviewee people + personal links +
+# helper-left next-time topics. One person record per interviewee
+# (recordings/people/<person_id>/person.json); the personal link carries an
+# unguessable token stored hashed server-side. Sessions bind to exactly one
+# person (recordings/<session>/person.json) and are indexed per person.
+# Next-time topics surface only as openers/follow-ups when no open thread
+# fits, are held when the speaker is tired/distressed, and never interrupt
+# mid-conversation.
+PERSON_TOKEN_BYTES = 24
+PERSON_TOKEN_DOMAIN = "person-link-v1"
+MAX_TOPICS_PER_PERSON = 50
+MAX_TOPIC_CHARS = 280
+
+
+def people_dir():
+    return RECORDINGS / "people"
+
+
+def person_dir(person_id):
+    return people_dir() / person_id
+
+
+def hash_person_token(token):
+    return hashlib.sha256(
+        (PERSON_TOKEN_DOMAIN + ":" + str(token or "")).encode()).hexdigest()
+
+
+def load_person(person_id):
+    """Load a person record; corrupt/missing/unknown recovers to None."""
+    pid = sanitize_id(person_id or "", default="")
+    if not pid:
+        return None
+    path = person_dir(pid) / "person.json"
+    try:
+        data = json.loads(path.read_text()) if path.is_file() else None
+    except (ValueError, OSError):
+        return None
+    if not isinstance(data, dict) or data.get("person_id") != pid:
+        return None
+    if not str(data.get("display_name", "")).strip():
+        return None
+    return data
+
+
+def find_person_by_token(token):
+    """Resolve a personal-link token to a person record via its hash."""
+    want = hash_person_token(token)
+    try:
+        dirs = sorted((d for d in people_dir().iterdir() if d.is_dir()),
+                      key=lambda d: d.name)
+    except OSError:
+        return None
+    for d in dirs:
+        try:
+            data = json.loads((d / "person.json").read_text())
+        except (ValueError, OSError):
+            continue
+        if (isinstance(data, dict)
+                and hmac.compare_digest(
+                    str(data.get("token_hash", "")), want)):
+            return data
+    return None
+
+
+def person_token_ok(person, token):
+    return bool(person) and bool(token) and hmac.compare_digest(
+        str(person.get("token_hash", "")),
+        hash_person_token(token))
+
+
+def load_person_consent(person_id):
+    """Per-person wishes; falls back to blank (session files stay fallback)."""
+    pdir = person_dir(sanitize_id(person_id or "", default=""))
+    return load_consent(pdir)
+
+
+def person_has_wishes(consent):
+    c = consent or {}
+    return (c.get("ai_reconstruction") is not None
+            or bool((c.get("access") or "").strip())
+            or c.get("voice_clone") is not None)
+
+
+def load_person_sessions(person_id):
+    path = person_dir(sanitize_id(person_id or "", default="")) / "sessions.json"
+    try:
+        data = json.loads(path.read_text()) if path.is_file() else []
+    except (ValueError, OSError):
+        return []
+    return [s for s in data if isinstance(s, str) and s] if isinstance(
+        data, list) else []
+
+
+def record_person_session(person_id, session_id):
+    pdir = person_dir(sanitize_id(person_id or "", default=""))
+    pdir.mkdir(parents=True, exist_ok=True)
+    path = pdir / "sessions.json"
+    sessions = load_person_sessions(person_id)
+    if session_id not in sessions:
+        sessions.append(session_id)
+    try:
+        path.write_text(json.dumps(sessions, indent=2))
+    except OSError:
+        pass
+
+
+def latest_person_session(person_id, exclude=""):
+    """Most recent existing session dir for this person (or '')."""
+    for sid in reversed(load_person_sessions(person_id)):
+        sdir = RECORDINGS / sanitize_id(sid, default="")
+        try:
+            if (sdir.is_dir()
+                    and RECORDINGS in sdir.resolve().parents
+                    and (sdir / "transcript.jsonl").is_file()):
+                if sid != exclude:
+                    return sid
+        except OSError:
+            continue
+    return ""
+
+
+def load_next_topics(person_id):
+    """Queued/asked helper topics; corrupt/missing recovers to []."""
+    path = person_dir(sanitize_id(person_id or "", default="")) / "next_topics.json"
+    try:
+        data = json.loads(path.read_text()) if path.is_file() else []
+    except (ValueError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    topics = []
+    for t in data:
+        if not isinstance(t, dict) or not str(t.get("text", "")).strip():
+            continue
+        topics.append({
+            "id": str(t.get("id") or ""),
+            "text": str(t.get("text", ""))[:MAX_TOPIC_CHARS],
+            "status": "asked" if t.get("status") == "asked" else "queued",
+            "created_at": str(t.get("created_at", "")),
+        })
+    return [t for t in topics if t["id"]]
+
+
+def save_next_topics(person_id, topics):
+    pdir = person_dir(sanitize_id(person_id or "", default=""))
+    pdir.mkdir(parents=True, exist_ok=True)
+    try:
+        (pdir / "next_topics.json").write_text(
+            json.dumps(topics or [], indent=2))
+    except OSError:
+        pass
+
+
 def parse_consent_bool(value):
     """Accept bools and gentle yes/no spellings; anything else is None."""
     if value is None:
@@ -2192,6 +2346,24 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return True
 
+    def _demo_blocked_person(self, token):
+        """In DEMO_MODE personal links never resolve (replay-only demo)."""
+        if not demo_mode_enabled():
+            return False
+        return True
+
+    def _read_json_body(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            length = 0
+        try:
+            payload = json.loads(
+                self.rfile.read(length or 0).decode() or "{}")
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if gate_enabled() and parsed.path in ("/login", "/logout"):
@@ -2239,6 +2411,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"facts": []})
         elif parsed.path == "/api/consent":
             qs = parse_qs(parsed.query)
+            person_q = sanitize_id((qs.get("person_id") or [""])[0]
+                                   if qs.get("person_id") else "",
+                                   default="")
+            if person_q and load_person(person_q) is not None:
+                # Per-person wishes (session files stay the fallback).
+                self._send_json({"consent": public_consent(
+                    load_person_consent(person_q))})
+                return
             session_id = "".join(
                 c for c in (qs.get("session_id") or [""])[0]
                 if c.isalnum() or c in "-_"
@@ -2312,6 +2492,45 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
+        elif parsed.path == "/api/person":
+            qs = parse_qs(parsed.query)
+            person_id = sanitize_id(
+                (qs.get("person_id") or [""])[0], default="")
+            token = "".join((qs.get("token") or [""])[:1]) or (
+                self.headers.get("X-Person-Token") or "")
+            person = load_person(person_id) if person_id else None
+            if person is None:
+                self._send_json({"error": "unknown person"}, 404)
+            elif not person_token_ok(person, token):
+                self._send_json({"error": "personal link required"}, 403)
+            else:
+                topics = load_next_topics(person_id)
+                self._send_json({
+                    "person": {
+                        "person_id": person["person_id"],
+                        "display_name": person.get("display_name", ""),
+                        "relation": person.get("relation", ""),
+                        "created_at": person.get("created_at", ""),
+                    },
+                    "sessions": load_person_sessions(person_id),
+                    "next_topics": topics,
+                    "consent": public_consent(
+                        load_person_consent(person_id)),
+                })
+        elif parsed.path.startswith("/i/"):
+            token = parsed.path[len("/i/"):]
+            if not token or "/" in token:
+                self.send_response(404)
+                self.end_headers()
+            elif self._demo_blocked_person(token):
+                self.send_response(404)
+                self.end_headers()
+            elif find_person_by_token(token) is None:
+                self.send_response(404)
+                self.end_headers()
+            else:
+                self._serve_file(
+                    ROOT / "index.html", "text/html; charset=utf-8")
         else:
             self.send_response(404)
             self.end_headers()
@@ -2335,6 +2554,104 @@ class Handler(BaseHTTPRequestHandler):
         if not gate_allows(self):
             self._send_json({"error": "password required"}, 401)
             return
+        if parsed.path in ("/api/people", "/api/people/lookup",
+                             "/api/next-topics"):
+            payload = self._read_json_body()
+            if payload is None:
+                self._send_json({"error": "invalid JSON body"}, 400)
+                return
+            if demo_mode_enabled():
+                self._send_json({"error": DEMO_WRITE_BLOCKED_MSG}, 403)
+                return
+            if parsed.path == "/api/people/lookup":
+                person = find_person_by_token(
+                    str(payload.get("token") or ""))
+                if person is None:
+                    self._send_json({"error": "unknown personal link"},
+                                    404)
+                else:
+                    self._send_json({
+                        "person_id": person["person_id"],
+                        "display_name": person.get("display_name", ""),
+                    })
+                return
+            if parsed.path == "/api/next-topics":
+                person_id = sanitize_id(payload.get("person_id") or "",
+                                        default="")
+                person = load_person(person_id) if person_id else None
+                if person is None:
+                    self._send_json({"error": "unknown person"}, 404)
+                    return
+                raw = payload.get("topics")
+                topics_in = raw if isinstance(raw, list) else [raw]
+                topics = load_next_topics(person_id)
+                queued = sum(1 for t in topics if t["status"] == "queued")
+                added = []
+                for entry in topics_in:
+                    text = str(entry or "").strip()[:MAX_TOPIC_CHARS]
+                    if not text:
+                        continue
+                    if queued >= MAX_TOPICS_PER_PERSON:
+                        break
+                    tid = "topic-%d-%s" % (
+                        int(time.time() * 1000),
+                        secrets.token_hex(4))
+                    topics.append({"id": tid, "text": text,
+                                   "status": "queued",
+                                   "created_at": utcnow_iso()})
+                    added.append({"id": tid, "text": text})
+                    queued += 1
+                if not added:
+                    self._send_json(
+                        {"error": "topics is required (non-empty strings)"},
+                        400)
+                    return
+                save_next_topics(person_id, topics)
+                self._send_json({"person_id": person_id, "added": added,
+                                 "queued": queued})
+                return
+            # POST /api/people: helper creates one record per interviewee.
+            # Self-setup ("Add me too") is the same call — no hard-coded
+            # roles, anyone can be an interviewee including the helper.
+            name = str(payload.get("display_name") or "").strip()
+            relation = str(payload.get("relation") or "").strip()[:120]
+            if not name:
+                self._send_json({"error": "display_name is required"},
+                                400)
+                return
+            if len(name) > 120:
+                self._send_json(
+                    {"error": "display_name is too long (max 120)"}, 400)
+                return
+            person_id = "p-" + secrets.token_hex(6)
+            while person_dir(person_id).exists():
+                person_id = "p-" + secrets.token_hex(6)
+            token = secrets.token_urlsafe(PERSON_TOKEN_BYTES)
+            pdir = person_dir(person_id)
+            pdir.mkdir(parents=True, exist_ok=True)
+            try:
+                (pdir / "person.json").write_text(json.dumps({
+                    "person_id": person_id,
+                    "display_name": name[:120],
+                    "relation": relation,
+                    "token_hash": hash_person_token(token),
+                    "created_at": utcnow_iso(),
+                }, indent=2))
+            except OSError:
+                self._send_json({"error": "could not save person"}, 500)
+                return
+            save_consent(pdir, blank_consent())
+            save_next_topics(person_id, [])
+            try:
+                (pdir / "sessions.json").write_text(json.dumps([]))
+            except OSError:
+                pass
+            self._send_json({"person_id": person_id,
+                             "display_name": name[:120],
+                             "relation": relation,
+                             "person_token": token,
+                             "personal_link": "/i/" + token})
+            return
         if parsed.path == "/api/consent":
             length = int(self.headers.get("Content-Length", 0))
             try:
@@ -2347,8 +2664,24 @@ class Handler(BaseHTTPRequestHandler):
                 # recordings/ — every one stays blocked in the shared demo.
                 self._send_json({"error": DEMO_WRITE_BLOCKED_MSG}, 403)
                 return
+            person_scope = None
+            if payload.get("person_id"):
+                pid = sanitize_id(payload.get("person_id") or "",
+                                  default="")
+                person = load_person(pid) if pid else None
+                if person is None:
+                    self._send_json({"error": "unknown person"}, 404)
+                    return
+                token = (str(payload.get("person_token") or "")
+                         or (self.headers.get("X-Person-Token") or ""))
+                if not person_token_ok(person, token):
+                    self._send_json({"error": "personal link required"},
+                                    403)
+                    return
+                person_scope = pid
             session_id = sanitize_id(payload.get("session_id") or "default")
-            session_dir = RECORDINGS / session_id
+            session_dir = (person_dir(person_scope)
+                           if person_scope else RECORDINGS / session_id)
             consent = load_consent(session_dir)
             if payload.get("revoke") is True:
                 # Interviewee act: blanks the wishes (incl. access_list +
@@ -2494,6 +2827,23 @@ class Handler(BaseHTTPRequestHandler):
 
         session_id = sanitize_id(payload.get("session_id") or "default")
         resume_from = sanitize_id(payload.get("resume_from") or "", default="")
+        person_id = sanitize_id(payload.get("person_id") or "", default="")
+        person = load_person(person_id) if person_id else None
+        if person_id and person is None:
+            self._send_json({"error": "unknown person"}, 404)
+            return
+        if person is not None:
+            token = (str(payload.get("person_token") or "")
+                     or (self.headers.get("X-Person-Token") or ""))
+            if not person_token_ok(person, token):
+                self._send_json({"error": "personal link required"}, 403)
+                return
+            if not resume_from:
+                # Auto-resume: the elder never types a code — a new
+                # session for this person reopens their latest threads,
+                # facts, and consent via the resume path below.
+                resume_from = latest_person_session(
+                    person_id, exclude=session_id)
         history = payload.get("history") or []
         audio_b64 = payload.get("audio_b64") or ""
         # STT input: browser transcript by default; server-side Whisper can
@@ -2514,6 +2864,14 @@ class Handler(BaseHTTPRequestHandler):
 
         session_dir = RECORDINGS / session_id
         session_dir.mkdir(parents=True, exist_ok=True)
+        if person is not None:
+            # Every session belongs to exactly one person: bind + index.
+            try:
+                (session_dir / "person.json").write_text(json.dumps(
+                    {"person_id": person_id}))
+            except OSError:
+                pass
+            record_person_session(person_id, session_id)
         # Resume: on the first turn of a new session, copy the source
         # session's OPEN threads (+facts for the map). Unknown source ->
         # normal fresh session, no error.
@@ -2550,6 +2908,16 @@ class Handler(BaseHTTPRequestHandler):
                                     json.dumps(src_facts, indent=2))
                         except (ValueError, OSError):
                             pass
+            except OSError:
+                pass
+        if (is_first_turn and person is not None
+                and not (session_dir / "consent.json").exists()):
+            # Per-person wishes ride along to each new session (the
+            # resume carry above covers session-level wishes first).
+            try:
+                pwishes = load_person_consent(person_id)
+                if person_has_wishes(pwishes):
+                    save_consent(session_dir, pwishes)
             except OSError:
                 pass
         threads = load_threads(session_dir)
@@ -2673,6 +3041,28 @@ class Handler(BaseHTTPRequestHandler):
         suggested = pause_suggested(
             turn_count, transcript_text, prior_word_counts,
             llm_tired=llm_tired)
+        # Helper-left next-time topics: used ONLY when no open thread
+        # fits (as the opener or a follow-up), held while the speaker is
+        # tired/distressed, and never interrupting mid-conversation while
+        # threads are open.
+        topics_asked, topics_held, topics_pending = [], [], 0
+        if person is not None:
+            all_topics = load_next_topics(person_id)
+            queued = [t for t in all_topics if t["status"] == "queued"]
+            topics_pending = len(queued)
+            if queued:
+                if suggested or llm_distressed:
+                    topics_held = [t["id"] for t in queued]
+                elif not still_open:
+                    opener = queued[0]
+                    if opener["text"].strip():
+                        question = opener["text"]
+                    topics_asked = [opener["id"]]
+                    topics_pending = len(queued) - 1
+                    for t in all_topics:
+                        if t["id"] == opener["id"]:
+                            t["status"] = "asked"
+                    save_next_topics(person_id, all_topics)
         consent = load_consent(session_dir)
         due = consent_due(turn_count, suggested, consent)
 
@@ -2693,6 +3083,9 @@ class Handler(BaseHTTPRequestHandler):
             "consent": public_consent(consent),
             "consent_due": due,
             "consent_prompt": CONSENT_PROMPT if due else "",
+            "topics_asked": topics_asked,
+            "topics_held": topics_held,
+            "topics_pending": topics_pending,
         }
 
         # Append turn + persist facts.
@@ -2705,6 +3098,8 @@ class Handler(BaseHTTPRequestHandler):
                 "threads_covered": threads_covered,
                 "pause_suggested": suggested,
                 "distress": bool(llm_distressed),
+                "topics_asked": topics_asked,
+                "topics_held": topics_held,
             }) + "\n")
         facts_path = session_dir / "facts.json"
         try:
