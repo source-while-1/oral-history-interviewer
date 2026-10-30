@@ -683,7 +683,7 @@ def frame_pause(img, d, f, p):
              f["tiny"], fill=CARD, outline=LINE, anchor="ma",
              text_fill=MUTED)
     if p > 0.8:
-        chip(d, (1200, 168), "> Her code to come back",
+        chip(d, (1200, 168), "> Her link to come back",
              f["tiny"], fill=CARD, outline=LINE, anchor="ra",
              text_fill=MUTED)
 
@@ -696,11 +696,11 @@ def frame_resume(img, d, f, p):
         d.rounded_rectangle([80, 168, 560, 380], radius=14, fill=CARD,
                             outline=LINE, width=2)
         reg_box("panel", [80, 168, 560, 380], "resume code card")
-        text(d, (320, 200), "Rosa's code to come back", f["body"],
+        text(d, (320, 200), "Rosa's link to come back", f["body"],
              anchor="ma")
         text(d, (320, 296), "rosa-1958", _font(40, bold=True),
              fill=ACCENT, anchor="ma")
-        text(d, (320, 350), "we showed it when she paused", f["small"],
+        text(d, (320, 350), "same link, right where she paused", f["small"],
              fill=MUTED, anchor="ma")
     if p > 0.35:
         d.rounded_rectangle([640, 168, 1200, 380], radius=14, fill=CARD,
@@ -710,7 +710,7 @@ def frame_resume(img, d, f, p):
              anchor="ma")
         text(d, (920, 256), "picks up where she left off", f["small"],
              fill=MUTED, anchor="ma")
-        text(d, (920, 306), "%d stories kept" % N_STILL_OPEN,
+        text(d, (920, 306), "every story still here",
              _font(30, bold=True), fill=INK, anchor="ma")
     if p > 0.65:
         # Rosa herself, back on her link: a statement, never a question.
@@ -1182,7 +1182,7 @@ NARRATION = {
              "words."),
     "pause": ("Then Rosa gets tired. She says she needs to rest. The app "
               "does not push. It keeps her place."),
-    "resume": ("The next Sunday Rosa comes back. One short code brings her "
+    "resume": ("The next Sunday Rosa comes back. Her same link brings her "
                "home. The grandson leaves a topic for next time."),
     "consent": ("But first, Rosa decides. Only family may listen. Nothing "
                 "speaks in her voice. And she can take it back."),
