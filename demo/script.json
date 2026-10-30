@@ -1,19 +1,19 @@
 {
-  "_note": "SYNTHETIC DEMO SCRIPT. Every person, place, and event below is fictional and was invented for this hackathon demo. No real voices, names, or personal data are involved: the audio clips are generated silence, and the 'transcripts' are typed strings fed to /api/turn exactly as a browser STT result would be.",
+  "_note": "SYNTHETIC DEMO SCRIPT. Every person, place, and event below is fictional and was invented for this hackathon demo. No real voices, names, or personal data are involved: the audio clips are generated silence, and the 'transcripts' are typed strings fed to /api/turn exactly as a browser STT result would be. Each turn is genuine first-person speech by its labeled speaker: Rosa and Emil each say 'I', and each names only the OTHER (the MOCK stub opens a person thread per 'Title Name' mention, so cross-mentions keep the family map filled).",
   "session_id": "demo-synthetic",
   "turns": [
     {
-      "transcript": "I grew up on a farm in Ohio with Aunt Rosa. She kept goats behind the red barn.",
+      "transcript": "I grew up on a farm in Ohio with Grandpa Emil. I kept goats behind the red barn.",
       "segments": [
         {
           "id": "seg-0",
-          "text": "I grew up on a farm in Ohio with Aunt Rosa.",
+          "text": "I grew up on a farm in Ohio with Grandpa Emil.",
           "start": 0.0,
           "end": 3.5
         },
         {
           "id": "seg-1",
-          "text": "She kept goats behind the red barn.",
+          "text": "I kept goats behind the red barn.",
           "start": 3.5,
           "end": 6.0
         }
@@ -21,17 +21,17 @@
       "speaker": "Aunt Rosa"
     },
     {
-      "transcript": "Grandpa Emil built that barn in 1958 with his brother. We all worked the harvest together.",
+      "transcript": "I built that barn in 1958 with my brother. Aunt Rosa and I worked the harvest together.",
       "segments": [
         {
           "id": "seg-0",
-          "text": "Grandpa Emil built that barn in 1958 with his brother.",
+          "text": "I built that barn in 1958 with my brother.",
           "start": 0.0,
           "end": 4.0
         },
         {
           "id": "seg-1",
-          "text": "We all worked the harvest together.",
+          "text": "Aunt Rosa and I worked the harvest together.",
           "start": 4.0,
           "end": 6.5
         }
@@ -39,17 +39,17 @@
       "speaker": "Grandpa Emil"
     },
     {
-      "transcript": "My proudest moment is the county fair pie prize Aunt Rosa won. We still talk about it every winter.",
+      "transcript": "I won the county fair pie prize — we still talk about it every winter.",
       "segments": [
         {
           "id": "seg-0",
-          "text": "My proudest moment is the county fair pie prize Aunt Rosa won.",
+          "text": "I won the county fair pie prize",
           "start": 0.0,
           "end": 4.5
         },
         {
           "id": "seg-1",
-          "text": "We still talk about it every winter.",
+          "text": "we still talk about it every winter.",
           "start": 4.5,
           "end": 7.0
         }
@@ -78,11 +78,11 @@
   ],
   "resume_session_id": "demo-resumed",
   "resume_turn": {
-    "transcript": "Back again — Grandpa Emil taught us everything about the harvest, just like I said.",
+    "transcript": "Back again — Grandpa Emil taught me everything about the harvest, just like I said.",
     "segments": [
       {
         "id": "seg-0",
-        "text": "Back again — Grandpa Emil taught us everything.",
+        "text": "Back again — Grandpa Emil taught me everything",
         "start": 0.0,
         "end": 3.5
       },
@@ -92,6 +92,7 @@
         "start": 3.5,
         "end": 6.0
       }
-    ]
+    ],
+    "speaker": "Aunt Rosa"
   }
 }

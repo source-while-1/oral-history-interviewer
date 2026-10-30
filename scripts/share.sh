@@ -17,8 +17,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Password gate: refuse to share publicly without DEMO_PASSWORD (env or .env).
 # The server requires the same value to mint session cookies for every route.
-if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "$ROOT/.env" ]; then
-  _pw="$( { grep -E '^(export[[:space:]]+)?DEMO_PASSWORD=' "$ROOT/.env" || true; } | tail -n 1 | cut -d= -f2-)"
+# SHARE_ENV_FILE overrides the .env path (used by tests to point at an empty
+# file so they can never pick up a real password from the checkout's .env).
+ENV_FILE="${SHARE_ENV_FILE:-$ROOT/.env}"
+if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "$ENV_FILE" ]; then
+  _pw="$( { grep -E '^(export[[:space:]]+)?DEMO_PASSWORD=' "$ENV_FILE" || true; } | tail -n 1 | cut -d= -f2-)"
   _pw="${_pw%$'\r'}"
   case "$_pw" in
     \"*\") _pw="${_pw#\"}"; _pw="${_pw%\"}" ;;
@@ -28,7 +31,7 @@ if [ -z "${DEMO_PASSWORD:-}" ] && [ -f "$ROOT/.env" ]; then
 fi
 if [ -z "${DEMO_PASSWORD:-}" ]; then
   echo "error: DEMO_PASSWORD is not set." >&2
-  echo "Set it in the environment or in $ROOT/.env, then re-run." >&2
+  echo "Set it in the environment or in $ENV_FILE, then re-run." >&2
   echo "(See .env.example for the placeholder; never commit the real value.)" >&2
   exit 1
 fi

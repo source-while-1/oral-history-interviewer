@@ -549,9 +549,10 @@ def frame_threads(img, d, f, p):
          fill=MUTED, anchor="ra")
     portrait_kid(img, d, 200, 330)
     turn_text = [
-        "I grew up on a farm in Ohio.",
-        "Grandpa Emil built that barn in 1958.",
-        "My proudest moment is the county fair pie prize Aunt Rosa won.",
+        "I grew up on a farm in Ohio with Grandpa Emil.",
+        "I built that barn in 1958 with my brother.",
+        "I won the county fair pie prize \u2014 we still talk about it "
+        "every winter.",
     ][ti]
     if p > 0.05 + ti * 0.3:
         say(img, d, f, who, 600, 230, 600, turn_text, 560, 470, pcy=330)
@@ -695,10 +696,12 @@ def frame_ask(img, d, f, p):
         reg_box("panel", [80, 190, 1200, 330], "archive answer panel")
         text(d, (120, 212), "ARCHIVE ANSWER", f["tiny"], fill=MUTED,
              anchor="la")
-        text(d, (120, 252), "\u201cI grew up on a farm in Ohio.\u201d",
+        text(d, (120, 252), "\u201cI grew up on a farm in Ohio with "
+                          "Grandpa Emil.\u201d",
              f["small"], anchor="la")
         SPOKEN_LOG.append({"scene": CUR_SCENE, "kind": "rosa",
-                           "text": "I grew up on a farm in Ohio.",
+                           "text": "I grew up on a farm in Ohio with "
+                                   "Grandpa Emil.",
                            "src": "session"})
     if p > 0.35:
         chip(d, (80, 360),
@@ -740,7 +743,7 @@ def frame_character(img, d, f, p):
              fill=ACCENT, anchor="mm")
     if p > 0.2:
         say(img, d, f, "ghost", 600, 300, 600,
-            "I grew up on a farm in Ohio with Aunt Rosa.", 560, 200,
+            "I grew up on a farm in Ohio with Grandpa Emil.", 560, 200,
             pcy=380)
     if p > 0.4:
         chip(d, (600, 440), "Aunt Rosa · seg-0 · 0.0–3.5s · cited",
@@ -881,14 +884,23 @@ def _norm_quote(s):
                   re.sub(r"[^a-z0-9 ]", "", s.lower())).strip()
 
 
+FIRST_PERSON_RE = re.compile(
+    r"\b(i|me|my|mine|myself|we|us|our|ours|ourselves)\b",
+    re.IGNORECASE)
+
+
 def check_quotes(f):
     """Every session-sourced line must map to the same speaker's turn.
 
     Renders every scene in BOTH themes at several progress points (so
     animated moments are all collected), then requires each src="session"
-    line to appear (normalized) inside a demo/script.json turn spoken by
-    the SAME speaker. src="product" lines are listed for audit but never
-    presented as session quotes. sys.exit (non-zero) on any mismatch.
+    line to (1) appear (normalized) inside a demo/script.json turn spoken
+    by the SAME speaker, (2) contain a first-person marker (genuine
+    first-person speech by its labeled speaker), and (3) NOT contain any
+    token of the speaker's own name (no third-person self-mention: Rosa
+    never says "rosa"/"aunt", Emil never says "emil"/"grandpa").
+    src="product" lines are listed for audit but never presented as
+    session quotes. sys.exit (non-zero) on any mismatch.
     """
     SPOKEN_LOG.clear()
     for theme in THEMES:
@@ -914,11 +926,25 @@ def check_quotes(f):
             continue
         want = KIND_SPEAKER.get(e["kind"])
         norm = _norm_quote(e["text"])
+        own_tokens = set(want.lower().split()) if want else set()
         if not want or not any(norm and norm in t for t in
                                by_speaker.get(want, [])):
             problems.append(
                 "%s: %r is not spoken by %s in demo/script.json"
                 % (e["scene"], e["text"][:60], want))
+            continue
+        if not FIRST_PERSON_RE.search(e["text"]):
+            problems.append(
+                "%s: %r has no first-person marker (not genuine "
+                "first-person speech by %s)"
+                % (e["scene"], e["text"][:60], want))
+            continue
+        hit = own_tokens.intersection(norm.split())
+        if hit:
+            problems.append(
+                "%s: %r mentions the speaker's own name %r (%s speaks "
+                "of themselves in the third person)"
+                % (e["scene"], e["text"][:60], sorted(hit), want))
             continue
         print("quote OK (session line): %s: %r (%s)" % (
             e["scene"], e["text"][:60], want))

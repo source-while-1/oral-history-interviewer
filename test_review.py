@@ -59,7 +59,7 @@ def main():
         sids.append(victim)
         post("/api/turn", {
             "session_id": victim, "audio_b64": "",
-            "transcript": "I grew up on a farm in Ohio with Aunt Rosa.",
+            "transcript": "I grew up on a farm in Ohio with Grandpa Emil.",
             "segments": [{"id": "seg-0", "text": "x", "start": 0.0, "end": 1.0}],
         })
         st, body, _ = get(f"/api/facts?session_id=../recordings/{victim}")

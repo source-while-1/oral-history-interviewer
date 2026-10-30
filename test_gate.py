@@ -193,14 +193,34 @@ def main():
         stop(srv)
 
     # -- share.sh refuses without a password, before doing anything else --
+    # NEVER let this test open a real tunnel: point SHARE_ENV_FILE at an
+    # empty file (so the checkout's real .env password can't leak in) and
+    # put a fake cloudflared first on PATH that only records it was called.
     sh = ROOT / "scripts" / "share.sh"
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="gate-share-")
+    empty_env = os.path.join(tmpd, "empty.env")
+    open(empty_env, "w").close()
+    marker = os.path.join(tmpd, "cloudflared-called")
+    stubdir = os.path.join(tmpd, "bin")
+    os.makedirs(stubdir, exist_ok=True)
+    with open(os.path.join(stubdir, "cloudflared"), "w") as f:
+        f.write("#!/bin/bash\necho CALLED >> '%s'\nexit 0\n" % marker)
+    os.chmod(os.path.join(stubdir, "cloudflared"), 0o755)
     env = {k: v for k, v in os.environ.items() if k != "DEMO_PASSWORD"}
-    env["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
-    r = subprocess.run(["bash", str(sh), "18911"], env=env, cwd=str(ROOT),
-                       capture_output=True, text=True, timeout=30)
+    env["SHARE_ENV_FILE"] = empty_env
+    env["PATH"] = stubdir + os.pathsep + env.get("PATH", "/usr/bin:/bin")
+    try:
+        r = subprocess.run(["bash", str(sh), "18911"], env=env, cwd=str(ROOT),
+                           capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        r = None
     check("share-refuses-no-password",
-          r.returncode != 0 and "DEMO_PASSWORD" in (r.stderr or ""),
-          f"rc={r.returncode}")
+          r is not None and r.returncode != 0
+          and "DEMO_PASSWORD" in (r.stderr or "")
+          and not os.path.exists(marker),
+          f"rc={None if r is None else r.returncode}"
+          f" marker={os.path.exists(marker)}")
 
     failed = [n for n, ok, _ in results if not ok]
     print(f"\n{len(results) - len(failed)}/{len(results)} checks passed")
